@@ -85,6 +85,8 @@ struct RobotState {
     bump_right: bool,
     lidar_distances: [f32; 8], // mm
     speed: f32,                // simulation speed multiplier (1.0 = real-time, 10.0 = 10× faster)
+    route: Vec<(f32, f32)>,    // complete route history in mm
+    seen_grid: Vec<bool>,      // visibility coverage grid (160x75 cells)
 }
 
 impl RobotState {
@@ -102,6 +104,8 @@ impl RobotState {
             bump_right: false,
             lidar_distances: [0.0; 8],
             speed: 1.0,
+            route: Vec::new(),
+            seen_grid: vec![false; 12000],
         }
     }
 
@@ -201,6 +205,18 @@ impl RobotState {
         self.y = new_y;
         self.bump_left = bump_l;
         self.bump_right = bump_r;
+
+        // Track route history (only add if moved at least 100 mm from last position)
+        let current_pos = (self.x, self.y);
+        if self.route.is_empty() {
+            self.route.push(current_pos);
+        } else {
+            let last = self.route.last().unwrap();
+            let dist_sq = (current_pos.0 - last.0).powi(2) + (current_pos.1 - last.1).powi(2);
+            if dist_sq > 10000.0 { // 100 mm (10 cm) threshold
+                self.route.push(current_pos);
+            }
+        }
     }
 }
 
@@ -574,6 +590,15 @@ fn dispatch(line: &str, state: &Arc<Mutex<RobotState>>) -> String {
             )
         }
 
+        "route" => {
+            let s = state.lock().unwrap();
+            let mut coords = Vec::with_capacity(s.route.len());
+            for &(rx, ry) in &s.route {
+                coords.push(format!("{:.1},{:.1}", rx / 10.0, ry / 10.0));
+            }
+            format!("OK route {}", coords.join(" "))
+        }
+
         "shutdown" | "quit" => {
             state.lock().unwrap().stop();
             "OK shutdown".into()
@@ -768,6 +793,8 @@ async fn main() {
             s.y = roomba_start_pos.y;
             s.heading = 0.0;
             s.stop();
+            s.route.clear();
+            s.seen_grid.fill(false);
             obstacles = generate_obstacles(roomba_start_pos);
         }
 
@@ -786,16 +813,90 @@ async fn main() {
                 lidar_vals[i] = cast_ray(origin, dir, &walls, &doors, &obstacles);
             }
             s.lidar_distances = lidar_vals;
+
+            // Mark immediate area (radius 1.5m = 1500mm) as seen
+            let rx = s.x;
+            let ry = s.y;
+            let cell_x = (rx / (10.0 * PDF_TO_MM)) as i32;
+            let cell_y = ((ry - 250.0 * PDF_TO_MM) / (10.0 * PDF_TO_MM)) as i32;
+            let reveal_radius = 4;
+            for dx in -reveal_radius..=reveal_radius {
+                for dy in -reveal_radius..=reveal_radius {
+                    if dx*dx + dy*dy <= reveal_radius * reveal_radius {
+                        let gx = cell_x + dx;
+                        let gy = cell_y + dy;
+                        if gx >= 0 && gx < 160 && gy >= 0 && gy < 75 {
+                            s.seen_grid[(gx * 75 + gy) as usize] = true;
+                        }
+                    }
+                }
+            }
+
+            // Reveal grid cells along lidar rays
+            for i in 0..8 {
+                let dist_mm = s.lidar_distances[i];
+                let angle_rad = s.heading + (angles[i] as f32).to_radians();
+                let dir = Vec2::new(angle_rad.cos(), angle_rad.sin());
+                
+                let steps = (dist_mm / 150.0) as i32;
+                for step in 0..=steps {
+                    let pt = origin + dir * (step as f32 * 150.0);
+                    let gx = (pt.x / (10.0 * PDF_TO_MM)) as i32;
+                    let gy = ((pt.y - 250.0 * PDF_TO_MM) / (10.0 * PDF_TO_MM)) as i32;
+                    if gx >= 0 && gx < 160 && gy >= 0 && gy < 75 {
+                        s.seen_grid[(gx * 75 + gy) as usize] = true;
+                    }
+                }
+            }
         }
 
         // --- RENDER ---
         clear_background(Color::from_rgba(20, 22, 28, 255)); // sleek dark background
+
+        // Retrieve robot state details for rendering
+        let (rx, ry, heading, vel, angular, trail_snap, b_l, b_r, lidar_snap, seen_snap) = {
+            let s = state.lock().unwrap();
+            (
+                s.x,
+                s.y,
+                s.heading,
+                s.vel,
+                s.angular,
+                s.trail.iter().cloned().collect::<Vec<_>>(),
+                s.bump_left,
+                s.bump_right,
+                s.lidar_distances,
+                s.seen_grid.clone(),
+            )
+        };
 
         // Draw Map Border Box
         let (x_min_s, y_max_s) = to_screen(0.0, 250.0 * PDF_TO_MM);
         let (x_max_s, y_min_s) = to_screen(1600.0 * PDF_TO_MM, 1000.0 * PDF_TO_MM);
         draw_rectangle(x_min_s, y_min_s, x_max_s - x_min_s, y_max_s - y_min_s, Color::from_rgba(30, 34, 45, 255));
         draw_rectangle_lines(x_min_s, y_min_s, x_max_s - x_min_s, y_max_s - y_min_s, 2.0, Color::from_rgba(65, 75, 95, 255));
+
+        // Draw Seen Grid (Fog of War Reveal Highlight)
+        let scale = 1120.0 / MAP_WIDTH_MM;
+        let cell_w_s = 10.0 * PDF_TO_MM * scale;
+        let cell_h_s = 10.0 * PDF_TO_MM * scale;
+        for gx in 0..160 {
+            for gy in 0..75 {
+                let idx = gx * 75 + gy;
+                if seen_snap[idx as usize] {
+                    let px = gx as f32 * 10.0 * PDF_TO_MM;
+                    let py = (250.0 + gy as f32 * 10.0) * PDF_TO_MM;
+                    let (sx, sy) = to_screen(px, py);
+                    draw_rectangle(
+                        sx,
+                        sy - cell_h_s,
+                        cell_w_s,
+                        cell_h_s,
+                        Color::from_rgba(0, 255, 200, 20), // faint cyan glow
+                    );
+                }
+            }
+        }
 
         // Draw Map Grid Lines every 1.5 meters (1500 mm)
         let grid_gap = 1500.0;
@@ -861,21 +962,7 @@ async fn main() {
             draw_circle_lines(sx, sy, s_rad, 1.5, Color::from_rgba(255, 120, 40, 220)); // glowing rim
         }
 
-        // Retrieve robot state details for rendering
-        let (rx, ry, heading, vel, angular, trail_snap, b_l, b_r, lidar_snap) = {
-            let s = state.lock().unwrap();
-            (
-                s.x,
-                s.y,
-                s.heading,
-                s.vel,
-                s.angular,
-                s.trail.iter().cloned().collect::<Vec<_>>(),
-                s.bump_left,
-                s.bump_right,
-                s.lidar_distances,
-            )
-        };
+
 
         // Draw Roomba Trail
         for i in 1..trail_snap.len() {
