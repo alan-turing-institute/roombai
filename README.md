@@ -9,3 +9,20 @@ flowchart LR
     RustLib -->|OUTPUT| Roomba((Roomba))
     Roomba -->|INPUT sensor data| Claude
 ```
+
+# Launch the simulator (opens an 800×800 window)
+
+```
+    cargo run -p simulator
+```
+
+In another terminal, send commands exactly as you would to the real pilot:
+
+```
+echo "move 50"    | nc localhost 9999   # drive forward 50 cm
+echo "turn 90"    | nc localhost 9999   # rotate 90° CCW
+echo "go 20 30"   | nc localhost 9999   # curve (20 cm/s + 30°/s), auto-stops after 3 s
+echo "drive -100 100" | nc localhost 9999  # spin in place via wheel speeds
+echo "stop"       | nc localhost 9999   # halt immediately
+echo "ping"       | nc localhost 9999   # health check → "OK pong"
+```
