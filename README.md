@@ -26,3 +26,8 @@ echo "drive -100 100" | nc localhost 9999  # spin in place via wheel speeds
 echo "stop"       | nc localhost 9999   # halt immediately
 echo "ping"       | nc localhost 9999   # health check → "OK pong"
 ```
+
+## Dimensions
+
+- Roomba diameter: 34cm
+- Door frame width (Enigma): 90cm
