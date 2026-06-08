@@ -1,0 +1,3 @@
+[workspace]
+members = ["roomba_pilot", "simulator"]
+resolver = "2"

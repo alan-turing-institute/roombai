@@ -1,0 +1,12 @@
+# Rust build artefacts (workspace-level target dir)
+/target
+
+# macOS metadata
+.DS_Store
+
+# Editor / IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
