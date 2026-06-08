@@ -80,19 +80,27 @@ obstacles encountered, waiting states, and arrival confirmation.
 
 ---
 
-## IMPORTANT: Read previous attempts first
+## Escape Protocol
 
-Before doing anything else, read these files to understand what has been tried and what worked/failed:
+When asked to escape the room, act as **Orchestrator** and run a subagent team via the `Agent` tool in a loop until the robot escapes or you determine human input is needed.
 
-- `attempt_1_review.md` — first attempt, camera angle issues, no movement
-- `attempt_2_review.md` — second attempt, found the door but strategy too slow
-- `attempt_4_review.md` — fourth attempt, good movement but stuck in chair bump loop
+**Strategist** — reads all attempt review files, proposes the *simplest viable strategy not yet tried*, with explicit success criteria and abort conditions.
 
-**Critical guidance from attempt 4 (user feedback):**
-- **Do NOT trust room layout information from previous attempts.** Treat each run as starting with a blank slate — prior door location guesses led to premature APPROACH mode and wasted time.
-- **Come up with a clear strategy at the start of each run** and monitor against it. If things aren't going well, stop and revise.
-- **Use the camera actively** for navigation decisions throughout the run, not just for periodic door confirmation.
-- **Be fluid** — don't be locked into explore.py or any fixed script. Adjust approach based on what is actually observed.
-- Aggressive bumping and movement is good. Keep doing it.
+**Executor** — implements the strategy via pilot commands and active camera use. Writes observations to `/tmp/execution_log.txt` as it goes. Runs until success, abort condition, or time limit.
+
+**Critic** — monitors `/tmp/execution_log.txt` in parallel with the Executor, delivers verdicts: `CONTINUE` / `ITERATE` / `ABANDON`. Must answer: *is this strategy converging, or fundamentally flawed?* Slow progress that is genuinely getting closer = CONTINUE. Not converging = ABANDON with a concrete diagnosis of why and what a better strategy would need to do differently.
+
+**Loop:** Strategist → [Executor ∥ Critic] → if ABANDON/ITERATE, return Critic's diagnosis to Strategist → repeat. Write a new `attempt_N_review.md` after each run.
+
+---
+
+## Attempt history
+
+Read these before strategising:
+
+- `attempt_1_review.md`
+- `attempt_2_review.md`
+- `attempt_4_review.md`
+- `attempt_5_review.md`
 
 ---
