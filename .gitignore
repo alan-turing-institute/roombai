@@ -10,3 +10,7 @@
 .vscode/
 *.swp
 *.swo
+
+# Project
+scratch/
+cargo_err.log

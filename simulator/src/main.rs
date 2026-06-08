@@ -6,6 +6,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod map_data;
+
 const WHEEL_SPAN_MM: f32 = 235.0;
 const MOVE_SPEED_CM_S: f64 = 20.0;
 const TURN_RATE_DEG_S: f64 = 60.0;
@@ -55,11 +57,13 @@ struct Segment {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 struct Door {
     name: String,
     p1: Vec2,
     p2: Vec2,
     is_open: bool,
+    is_top_door: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -91,10 +95,10 @@ struct RobotState {
 
 impl RobotState {
     fn new() -> Self {
-        // Starts in the middle of Enigma room: X_pdf = 1400, Y_pdf = 900
+        // Starts in the middle of Enigma room: X_pdf = 1520.0, Y_pdf = 775.0
         Self {
-            x: 1400.0 * PDF_TO_MM,
-            y: 900.0 * PDF_TO_MM,
+            x: 1520.0 * PDF_TO_MM,
+            y: 775.0 * PDF_TO_MM,
             heading: 0.0,
             vel: 0.0,
             angular: 0.0,
@@ -599,6 +603,15 @@ fn dispatch(line: &str, state: &Arc<Mutex<RobotState>>) -> String {
             format!("OK route {}", coords.join(" "))
         }
 
+        "speed" => {
+            if rest.len() != 1 {
+                return "ERR usage: speed <multiplier>".into();
+            }
+            let val: f32 = num!(rest[0], f32);
+            state.lock().unwrap().speed = val;
+            format!("OK speed {val}")
+        }
+
         "shutdown" | "quit" => {
             state.lock().unwrap().stop();
             "OK shutdown".into()
@@ -650,102 +663,11 @@ fn start_tcp_server(state: Arc<Mutex<RobotState>>) {
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    // Initialize walls (static segments)
-    let mut walls = Vec::new();
-    
-    // 1. Outer perimeter
-    walls.push(Segment { p1: pdf_pt(0.0, 250.0), p2: pdf_pt(1600.0, 250.0) });
-    walls.push(Segment { p1: pdf_pt(1600.0, 250.0), p2: pdf_pt(1600.0, 1000.0) });
-    walls.push(Segment { p1: pdf_pt(1600.0, 1000.0), p2: pdf_pt(0.0, 1000.0) });
-    walls.push(Segment { p1: pdf_pt(0.0, 1000.0), p2: pdf_pt(0.0, 250.0) });
+    let walls = map_data::get_walls();
+    let mut doors = map_data::get_doors();
+    let room_labels = map_data::get_room_labels();
 
-    // 2. Top row rooms vertical dividers
-    walls.push(Segment { p1: pdf_pt(250.0, 800.0), p2: pdf_pt(250.0, 1000.0) });
-    walls.push(Segment { p1: pdf_pt(550.0, 800.0), p2: pdf_pt(550.0, 1000.0) });
-    walls.push(Segment { p1: pdf_pt(750.0, 800.0), p2: pdf_pt(750.0, 1000.0) });
-    walls.push(Segment { p1: pdf_pt(1000.0, 800.0), p2: pdf_pt(1000.0, 1000.0) });
-    walls.push(Segment { p1: pdf_pt(1200.0, 800.0), p2: pdf_pt(1200.0, 1000.0) });
-
-    // 3. Top corridor walls (Y = 800) with door frame segments
-    // Roomba starts in Enigma (1200..1600). Door width 90cm = 25 units.
-    // Jack Good (0..250). Door: 20..45
-    walls.push(Segment { p1: pdf_pt(0.0, 800.0), p2: pdf_pt(20.0, 800.0) });
-    walls.push(Segment { p1: pdf_pt(45.0, 800.0), p2: pdf_pt(250.0, 800.0) });
-    // Rejewski (250..550). Door: 270..295
-    walls.push(Segment { p1: pdf_pt(250.0, 800.0), p2: pdf_pt(270.0, 800.0) });
-    walls.push(Segment { p1: pdf_pt(295.0, 800.0), p2: pdf_pt(550.0, 800.0) });
-    // Ada (550..750). Door: 570..595
-    walls.push(Segment { p1: pdf_pt(550.0, 800.0), p2: pdf_pt(570.0, 800.0) });
-    walls.push(Segment { p1: pdf_pt(595.0, 800.0), p2: pdf_pt(750.0, 800.0) });
-    // Lovelace (750..1000). Door: 770..795
-    walls.push(Segment { p1: pdf_pt(750.0, 800.0), p2: pdf_pt(770.0, 800.0) });
-    walls.push(Segment { p1: pdf_pt(795.0, 800.0), p2: pdf_pt(1000.0, 800.0) });
-    // CEO Office (1000..1200). Door: 1020..1045
-    walls.push(Segment { p1: pdf_pt(1000.0, 800.0), p2: pdf_pt(1020.0, 800.0) });
-    walls.push(Segment { p1: pdf_pt(1045.0, 800.0), p2: pdf_pt(1200.0, 800.0) });
-    // Enigma (1200..1600). Door: 1220..1245
-    walls.push(Segment { p1: pdf_pt(1200.0, 800.0), p2: pdf_pt(1220.0, 800.0) });
-    walls.push(Segment { p1: pdf_pt(1245.0, 800.0), p2: pdf_pt(1600.0, 800.0) });
-
-    // 4. Middle hallway boundary at Y = 720
-    // Mae Jemison door at X in [200, 245]
-    walls.push(Segment { p1: pdf_pt(0.0, 720.0), p2: pdf_pt(200.0, 720.0) });
-    walls.push(Segment { p1: pdf_pt(245.0, 720.0), p2: pdf_pt(600.0, 720.0) });
-    // Project Space door at X in [700, 745]
-    walls.push(Segment { p1: pdf_pt(600.0, 720.0), p2: pdf_pt(700.0, 720.0) });
-    walls.push(Segment { p1: pdf_pt(745.0, 720.0), p2: pdf_pt(1300.0, 720.0) });
-    // Kitchen door at X in [1350, 1395]
-    walls.push(Segment { p1: pdf_pt(1300.0, 720.0), p2: pdf_pt(1350.0, 720.0) });
-    walls.push(Segment { p1: pdf_pt(1395.0, 720.0), p2: pdf_pt(1600.0, 720.0) });
-
-    // 5. Lower partitions
-    walls.push(Segment { p1: pdf_pt(450.0, 250.0), p2: pdf_pt(450.0, 720.0) });
-    walls.push(Segment { p1: pdf_pt(1200.0, 250.0), p2: pdf_pt(1200.0, 720.0) });
-    walls.push(Segment { p1: pdf_pt(0.0, 480.0), p2: pdf_pt(450.0, 480.0) });
-    walls.push(Segment { p1: pdf_pt(450.0, 480.0), p2: pdf_pt(1200.0, 480.0) });
-    walls.push(Segment { p1: pdf_pt(1200.0, 480.0), p2: pdf_pt(1600.0, 480.0) });
-
-    // Initialize doors
-    let mut doors = vec![
-        Door { name: "Jack Good".into(), p1: pdf_pt(20.0, 800.0), p2: pdf_pt(45.0, 800.0), is_open: false },
-        Door { name: "Rejewski".into(), p1: pdf_pt(270.0, 800.0), p2: pdf_pt(295.0, 800.0), is_open: false },
-        Door { name: "Ada".into(), p1: pdf_pt(570.0, 800.0), p2: pdf_pt(595.0, 800.0), is_open: false },
-        Door { name: "Lovelace".into(), p1: pdf_pt(770.0, 800.0), p2: pdf_pt(795.0, 800.0), is_open: false },
-        Door { name: "CEO Office".into(), p1: pdf_pt(1020.0, 800.0), p2: pdf_pt(1045.0, 800.0), is_open: false },
-        Door { name: "Enigma".into(), p1: pdf_pt(1220.0, 800.0), p2: pdf_pt(1245.0, 800.0), is_open: false },
-        
-        Door { name: "Mae Jemison".into(), p1: pdf_pt(200.0, 720.0), p2: pdf_pt(245.0, 720.0), is_open: true },
-        Door { name: "Project Space".into(), p1: pdf_pt(700.0, 720.0), p2: pdf_pt(745.0, 720.0), is_open: true },
-        Door { name: "Kitchen".into(), p1: pdf_pt(1350.0, 720.0), p2: pdf_pt(1395.0, 720.0), is_open: true },
-    ];
-
-    // Room Label definitions
-    let room_labels = vec![
-        RoomLabel { name: "JACK GOOD", pos: pdf_pt(125.0, 920.0) },
-        RoomLabel { name: "DAVID BLACKWELL", pos: pdf_pt(125.0, 970.0) },
-        RoomLabel { name: "MARIAN REJEWSKI", pos: pdf_pt(400.0, 920.0) },
-        RoomLabel { name: "JOAN CLARKE", pos: pdf_pt(400.0, 970.0) },
-        RoomLabel { name: "ADA", pos: pdf_pt(650.0, 920.0) },
-        RoomLabel { name: "LOVELACE", pos: pdf_pt(875.0, 920.0) },
-        RoomLabel { name: "MARGARET HAMILTON", pos: pdf_pt(1100.0, 970.0) },
-        RoomLabel { name: "CEO OFFICE", pos: pdf_pt(1100.0, 920.0) },
-        RoomLabel { name: "ENIGMA 2.0", pos: pdf_pt(1400.0, 900.0) },
-        
-        RoomLabel { name: "CORRIDOR / HALLWAY", pos: pdf_pt(800.0, 750.0) },
-        RoomLabel { name: "CIPHER", pos: pdf_pt(225.0, 600.0) },
-        RoomLabel { name: "MAE JEMISON", pos: pdf_pt(225.0, 530.0) },
-        RoomLabel { name: "FLORENCE NIGHTINGALE", pos: pdf_pt(225.0, 380.0) },
-        RoomLabel { name: "PROJECT SPACE", pos: pdf_pt(825.0, 600.0) },
-        RoomLabel { name: "TEA POINT", pos: pdf_pt(825.0, 530.0) },
-        RoomLabel { name: "WELLBEING ROOM", pos: pdf_pt(825.0, 380.0) },
-        RoomLabel { name: "MEDIA SUITE", pos: pdf_pt(900.0, 440.0) },
-        RoomLabel { name: "MAIN KITCHEN", pos: pdf_pt(1400.0, 600.0) },
-        RoomLabel { name: "RECEPTION DESK", pos: pdf_pt(1400.0, 530.0) },
-        RoomLabel { name: "STAFF LIFT LOBBY", pos: pdf_pt(1400.0, 450.0) },
-        RoomLabel { name: "URSULA FRANKLIN", pos: pdf_pt(1400.0, 380.0) },
-    ];
-
-    let roomba_start_pos = Vec2::new(1400.0 * PDF_TO_MM, 900.0 * PDF_TO_MM);
+    let roomba_start_pos = Vec2::new(1520.0 * PDF_TO_MM, 775.0 * PDF_TO_MM);
     let mut obstacles = generate_obstacles(roomba_start_pos);
 
     let state = Arc::new(Mutex::new(RobotState::new()));
@@ -776,7 +698,7 @@ async fn main() {
         };
 
         for door in &mut doors {
-            if door.name == "Enigma" || door.name == "CEO Office" || door.name == "Lovelace" || door.name == "Ada" || door.name == "Rejewski" || door.name == "Jack Good" {
+            if door.is_top_door {
                 door.is_open = is_top_doors_open;
             }
         }
@@ -798,10 +720,16 @@ async fn main() {
             obstacles = generate_obstacles(roomba_start_pos);
         }
 
-        // 3. Physics & Sensor Update  (dt scaled by speed so motion is speed× faster)
         {
             let mut s = state.lock().unwrap();
-            s.update(dt * speed_val, &walls, &doors, &obstacles);
+            let total_dt = dt * speed_val;
+            let step_size = 0.005_f32; // 5ms steps for extremely high precision
+            let mut elapsed = 0.0;
+            while elapsed < total_dt {
+                let step = step_size.min(total_dt - elapsed);
+                s.update(step, &walls, &doors, &obstacles);
+                elapsed += step;
+            }
 
             // Cast Lidar rays (8 directions relative to heading)
             let origin = Vec2::new(s.x, s.y);
