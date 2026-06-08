@@ -71,38 +71,32 @@ rpicam-hello   # live preview (video)
 There is no `ANTHROPIC_API_KEY` available. Do **not** use the `anthropic` Python SDK
 or make any requests to external model APIs.
 
-### Vision inference — use the Claude Code CLI
-The `claude` CLI is available at `~/.local/bin/claude` and runs within this session's
-authentication. Use it to analyse image files via the built-in `Read` tool:
+### Vision inference — Hailo AI Hat+ (YOLO) + OpenCV
 
-```bash
-echo 'Read /tmp/view.jpg and reply with JSON: {"door_visible": bool, "door_position": "left"|"center"|"right"|null, "in_doorway": bool, "notes": "..."}' \
-  | claude --print --allowedTools "Read" --dangerously-skip-permissions
-```
+All vision runs locally on the Pi. No LLM calls.
 
-In Python (`find_door.py` uses this pattern):
-
+**YOLO (Hailo AI Hat+)** — detects COCO objects (person, chair, etc.) for obstacle context:
 ```python
-import subprocess, json
-
-def analyze(image_path: str) -> dict:
-    prompt = (
-        f'Read the image at {image_path} and reply with ONLY a JSON object:\n'
-        '{"door_visible": true/false, "door_position": "left"|"center"|"right"|null, '
-        '"in_doorway": true/false, "notes": "one sentence"}'
-    )
-    result = subprocess.run(
-        ["claude", "--print", "--allowedTools", "Read",
-         "--dangerously-skip-permissions"],
-        input=prompt, capture_output=True, text=True, timeout=30
-    )
-    return json.loads(result.stdout.strip())
+# hailo_platform SDK — model at /usr/share/hailo-models/yolov8s_h8l.hef
+# See _init_hailo() / run_yolo() in explore.py for the full initialisation pattern
 ```
 
-### Multi-agent navigation from Claude Code
-For more complex navigation tasks, orchestrate from within a Claude Code session using
-the `Agent` tool. Subagents can read image files with their `Read` tool (supports JPEG/PNG)
-and return structured analysis. Movement commands go via `Bash` → pilot daemon.
+**OpenCV door detection** — geometric analysis to find doorway openings:
+```python
+import cv2, numpy as np
+
+def detect_door_cv(img_bgr):
+    h, w   = img_bgr.shape[:2]
+    gray   = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    edges  = cv2.Canny(cv2.GaussianBlur(gray, (5,5), 0), 30, 100)
+    # Find near-vertical line segments → cluster x-positions → score pairs
+    # by gap width, low edge density in gap, and brightness ratio.
+    # Returns: door_visible, door_open, door_position, in_doorway, confidence
+```
+
+The combined `analyze(image_path)` function in `find_door.py` calls both and merges results.
+Vision runs on **every frame** (every 2 s in `explore.py`, each step in `find_door.py`).
+Response latency is milliseconds — no 20-30 s LLM wait.
 
 ### Speaker daemon (TTS during long runs)
 
@@ -151,9 +145,9 @@ Before doing anything else, read these files to understand what has been tried a
 
 `explore.py` is the primary navigation script. It runs the robot **concurrently**:
 - Movement loop runs independently (no waiting for vision)
-- Camera captures every 2s, Hailo inference in parallel
-- Claude vision check every 30s in background thread
-- Reads `/tmp/roomba_strategy.json` for supervisor overrides
+- Camera captures every 2s; YOLO + OpenCV door detection runs on every frame
+- Door state machine updates automatically (no human supervisor needed)
+- Reads `/tmp/roomba_strategy.json` for manual overrides
 
 ### Start the run
 
