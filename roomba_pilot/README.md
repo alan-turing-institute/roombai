@@ -19,7 +19,7 @@ Start the daemon (opens the port, enters SAFE mode, listens on `127.0.0.1:9999`)
 
 ```sh
 ./target/debug/pilot serve [SERIAL_PATH] [TCP_PORT]
-# defaults: /dev/tty.usbserial-BG03LB1L  9999
+# defaults: /dev/ttyUSB0  9999
 ```
 
 Then send commands from another shell:
