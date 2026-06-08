@@ -84,6 +84,7 @@ struct RobotState {
     bump_left: bool,
     bump_right: bool,
     lidar_distances: [f32; 8], // mm
+    speed: f32,                // simulation speed multiplier (1.0 = real-time, 10.0 = 10× faster)
 }
 
 impl RobotState {
@@ -100,11 +101,14 @@ impl RobotState {
             bump_left: false,
             bump_right: false,
             lidar_distances: [0.0; 8],
+            speed: 1.0,
         }
     }
 
     fn arm(&mut self, dur: Duration) {
-        self.deadline = Some(Instant::now() + dur);
+        // Divide real-time duration by speed so the deadline expires proportionally sooner.
+        let scaled = Duration::from_secs_f64(dur.as_secs_f64() / self.speed as f64);
+        self.deadline = Some(Instant::now() + scaled);
     }
 
     fn stop(&mut self) {
@@ -726,9 +730,19 @@ async fn main() {
         let dt = get_frame_time().min(0.05);
         let total_time = get_time();
 
-        // 1. Dynamic Doors Timer Cycle (18s: 12s closed, 6s open)
+        // Read speed multiplier once per frame (avoids holding the lock longer than needed)
+        let speed_val = state.lock().unwrap().speed;
+
+        // Speed toggle: S key switches between 1× and 10×
+        if is_key_pressed(KeyCode::S) {
+            let mut s = state.lock().unwrap();
+            s.speed = if s.speed > 1.0 { 1.0 } else { 10.0 };
+        }
+
+        // 1. Dynamic Doors Timer Cycle (18s: 12s closed, 6s open) — scaled to sim speed
         let cycle = 18.0;
-        let elapsed_in_cycle = total_time % cycle;
+        let sim_time = total_time * speed_val as f64;
+        let elapsed_in_cycle = sim_time % cycle;
         let is_top_doors_open = elapsed_in_cycle >= 12.0;
         let doors_time_left = if is_top_doors_open {
             cycle - elapsed_in_cycle
@@ -757,10 +771,10 @@ async fn main() {
             obstacles = generate_obstacles(roomba_start_pos);
         }
 
-        // 3. Physics & Sensor Update
+        // 3. Physics & Sensor Update  (dt scaled by speed so motion is speed× faster)
         {
             let mut s = state.lock().unwrap();
-            s.update(dt, &walls, &doors, &obstacles);
+            s.update(dt * speed_val, &walls, &doors, &obstacles);
 
             // Cast Lidar rays (8 directions relative to heading)
             let origin = Vec2::new(s.x, s.y);
@@ -942,7 +956,7 @@ async fn main() {
             Color::from_rgba(200, 205, 220, 255),
         );
         draw_text(
-            &format!("Velocity: Forward={vel_cm:.1}cm/s  Angular={ang_dps:.0}°/s"),
+            &format!("Velocity: Forward={vel_cm:.1}cm/s  Angular={ang_dps:.0}°/s  |  Speed: {speed_val:.0}× [S]"),
             600.0,
             68.0,
             16.0,
