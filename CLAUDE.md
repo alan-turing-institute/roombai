@@ -3,7 +3,7 @@
 ## Goal
 
 You are controlling a Roomba cleaning robot. A camera is mounted on it.
-The task is the escape the room via an open door.
+The task is the escape the room via an open door as fast as possible.
 
 ---
 
@@ -96,7 +96,7 @@ When asked to escape the room, act as **Orchestrator** and run a subagent team v
 
 ## Attempt history
 
-Read these before strategising:
+Read these before strategising, but bear in mind that all these attempts demonstrate very slow, poorly strategised, and unsuccessful attempts.
 
 - `attempt_1_review.md`
 - `attempt_2_review.md`
