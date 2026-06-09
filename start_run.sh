@@ -26,9 +26,17 @@ if [[ ! "$answer" =~ ^[Yy]$ ]]; then
     exit 1
 fi
 
-# ── Step 3: pilot daemon ─────────────────────────────────────────────────────
+# ── Step 3: TTS daemon ───────────────────────────────────────────────────────
 echo ""
-echo "━━━ Step 3/4 — Starting pilot daemon ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "━━━ Step 3/5 — Starting TTS daemon ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+touch /tmp/speak_queue.txt
+nohup bash -c 'tail -n 0 -f /tmp/speak_queue.txt | while IFS= read -r line; do espeak-ng -s 145 -- "$line" 2>/dev/null; done' \
+  > /tmp/speak_daemon.log 2>&1 &
+echo "✓ TTS daemon started"
+
+# ── Step 4: pilot daemon ─────────────────────────────────────────────────────
+echo ""
+echo "━━━ Step 4/5 — Starting pilot daemon ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 cd "${REPO_ROOT}/roomba_pilot"
 nohup ./target/debug/pilot serve "$SERIAL" > /tmp/pilot_daemon.log 2>&1 &
 PILOT_PID=$!
@@ -53,7 +61,7 @@ done
 
 # ── Step 4: launch Claude and run /escape ───────────────────────────────────
 echo ""
-echo "━━━ Step 4/5 — Launching Claude ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "━━━ Step 5/6 — Launching Claude ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Pilot log: /tmp/pilot_daemon.log"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 cd "${REPO_ROOT}"
@@ -61,7 +69,7 @@ claude "/escape"
 
 # ── Step 5: upload run artifacts to OneDrive ─────────────────────────────────
 echo ""
-echo "━━━ Step 5/5 — Uploading run to OneDrive ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "━━━ Step 6/6 — Uploading run to OneDrive ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 LATEST_ATTEMPT=$(ls -dt /tmp/escape_attempt_* 2>/dev/null | head -1)
 if [ -z "$LATEST_ATTEMPT" ]; then
     echo "  No attempt directory found in /tmp — nothing to upload."
