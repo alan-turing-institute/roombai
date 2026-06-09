@@ -68,13 +68,22 @@ ssh <pi_host> "cd /home/hackweek26/roombai \
 If the pull fails for any reason (diverged history, merge conflict, etc.)
 report the full error and stop — do not proceed with a mismatched codebase.
 
-### 3. Ensure run.sh is executable on the Pi
+### 4. Clear /tmp/ on the Pi
+
+Stop any leftover processes from previous runs, then wipe /tmp/ for a
+clean slate:
+
+```
+ssh <pi_host> "pkill -f explore.py 2>/dev/null; pkill -f speak_queue 2>/dev/null; sleep 1; rm -rf /tmp/*"
+```
+
+### 5. Ensure run.sh is executable on the Pi
 
 ```
 ssh <pi_host> "chmod +x /home/hackweek26/roombai/run.sh"
 ```
 
-### 4. Execute run.sh on the Pi
+### 6. Execute run.sh on the Pi
 
 ```
 ssh -t <pi_host> "bash /home/hackweek26/roombai/run.sh $ARGUMENTS"
@@ -100,7 +109,7 @@ The `-t` flag allocates a pseudo-TTY so Ctrl-C propagates correctly.
   d. **explore.py** — runs the main exploration loop, which also calls
      `ensure_models()` internally (instant because models are already resolved).
 
-### 5. Stream the run log
+### 7. Stream the run log
 
 After run.sh exits or is interrupted, offer to show the last 50 lines of
 `/tmp/roomba_log.txt`:
