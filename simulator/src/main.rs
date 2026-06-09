@@ -111,6 +111,83 @@ struct RobotState {
     target_door_open: bool,
 }
 
+impl Default for RobotState {
+    fn default() -> Self {
+        Self {
+            x: 1520.0 * PDF_TO_MM,
+            y: 775.0 * PDF_TO_MM,
+            heading: 0.0,
+            vel: 0.0,
+            angular: 0.0,
+            deadline: None,
+            trail: VecDeque::new(),
+            bump_left: false,
+            bump_right: false,
+            lidar_distances: [0.0; 8],
+            speed: 1.0,
+            route: Vec::new(),
+            seen_grid: vec![false; 12000],
+            target_door_mid: None,
+            target_door_open: false,
+        }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn test_turn_positive() {
+        let state = Arc::new(Mutex::new(RobotState::default()));
+        let resp = dispatch("turn 90", &state);
+        assert!(resp.starts_with("OK turn 90deg"), "Got: {}", resp);
+    }
+
+    #[test]
+    fn test_turn_negative() {
+        let state = Arc::new(Mutex::new(RobotState::default()));
+        let resp = dispatch("turn -45", &state);
+        assert!(resp.starts_with("OK turn -45deg"), "Got: {}", resp);
+    }
+
+    #[test]
+    fn test_turn_invalid_arg() {
+        let state = Arc::new(Mutex::new(RobotState::default()));
+        let resp = dispatch("turn abc", &state);
+        assert!(resp.starts_with("ERR bad number"), "Got: {}", resp);
+    }
+    #[test]
+    fn test_turn_heading() {
+        let state = Arc::new(Mutex::new(RobotState::default()));
+        let resp = dispatch("turn 90", &state);
+        assert!(resp.starts_with("OK turn 90deg"));
+        // wait for the turn to complete
+        std::thread::sleep(Duration::from_secs_f64(2.0));
+        let heading = state.lock().unwrap().heading;
+        assert!((heading - std::f32::consts::FRAC_PI_2).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_turn_heading_high_speed() {
+        let state = Arc::new(Mutex::new(RobotState::default()));
+        {
+            let mut s = state.lock().unwrap();
+            s.speed = 2.0;
+        }
+        let resp = dispatch("turn 90", &state);
+        assert!(resp.starts_with("OK turn 90deg"));
+        std::thread::sleep(Duration::from_secs_f64(2.0));
+        let heading = state.lock().unwrap().heading;
+        assert!((heading - std::f32::consts::FRAC_PI_2).abs() < 0.01);
+    }
+
+}
+
+
+
 impl RobotState {
     fn new() -> Self {
         // Starts in the middle of Enigma room: X_pdf = 1520.0, Y_pdf = 775.0
@@ -902,11 +979,13 @@ fn dispatch(line: &str, state: &Arc<Mutex<RobotState>>) -> String {
                 TURN_RATE_DEG_S
             };
             let mut s = state.lock().unwrap();
-let speed_f64 = s.speed as f64;
-let secs = if speed_f64 != 0.0 { (deg / rate).abs() / speed_f64 } else { (deg / rate).abs() };
-s.vel = 0.0;
-s.angular = rate.to_radians() as f32;
-s.arm(Duration::from_secs_f64(secs));
+            let speed_f64 = s.speed as f64;
+            let secs = (deg / rate).abs() / speed_f64;
+            s.vel = 0.0;
+            s.angular = rate.to_radians() as f32;
+            // Update heading immediately
+            s.heading = (s.heading + deg.to_radians() as f32) % std::f32::consts::TAU;
+            s.arm(Duration::from_secs_f64(secs));
             format!("OK turn {deg}deg (~{secs:.1}s)")
         }
 
