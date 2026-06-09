@@ -64,6 +64,8 @@ struct Door {
     p2: Vec2,
     is_open: bool,
     is_top_door: bool,
+    is_external: bool,
+    is_target: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -91,6 +93,8 @@ struct RobotState {
     speed: f32,                // simulation speed multiplier (1.0 = real-time, 10.0 = 10× faster)
     route: Vec<(f32, f32)>,    // complete route history in mm
     seen_grid: Vec<bool>,      // visibility coverage grid (160x75 cells)
+    target_door_mid: Option<Vec2>,
+    target_door_open: bool,
 }
 
 impl RobotState {
@@ -110,6 +114,8 @@ impl RobotState {
             speed: 1.0,
             route: Vec::new(),
             seen_grid: vec![false; 12000],
+            target_door_mid: None,
+            target_door_open: false,
         }
     }
 
@@ -165,9 +171,9 @@ impl RobotState {
                 }
             }
 
-            // 2. Closed doors
+            // 2. Closed doors (and external doors treated as permanent walls)
             for door in doors {
-                if !door.is_open {
+                if !door.is_open || door.is_external {
                     if let Some((normal, closest_pt)) = resolve_segment_collision(current_pos, ROOMBA_RADIUS_MM, door.p1, door.p2) {
                         let depth = ROOMBA_RADIUS_MM - (current_pos - closest_pt).length();
                         new_x += normal.x * depth;
@@ -294,7 +300,7 @@ fn cast_ray(
     }
 
     for door in doors {
-        if !door.is_open {
+        if !door.is_open || door.is_external {
             if let Some(t) = ray_intersect_segment(origin, dir, door.p1, door.p2) {
                 if t < min_t {
                     min_t = t;
@@ -612,6 +618,17 @@ fn dispatch(line: &str, state: &Arc<Mutex<RobotState>>) -> String {
             format!("OK speed {val}")
         }
 
+        "target" => {
+            let s = state.lock().unwrap();
+            if let Some(mid) = s.target_door_mid {
+                let dist = Vec2::new(s.x, s.y).distance(mid);
+                let door_state = if s.target_door_open { "open" } else { "closed" };
+                format!("OK dist={:.0} door={}", dist, door_state)
+            } else {
+                "OK dist=inf".into()
+            }
+        }
+
         "shutdown" | "quit" => {
             state.lock().unwrap().stop();
             "OK shutdown".into()
@@ -701,6 +718,15 @@ async fn main() {
             if door.is_top_door {
                 door.is_open = is_top_doors_open;
             }
+        }
+
+        // Sync target door state into RobotState for TCP access
+        if let Some(td) = doors.iter().find(|d| d.is_target) {
+            let mid = (td.p1 + td.p2) * 0.5;
+            let td_open = td.is_open;
+            let mut s = state.lock().unwrap();
+            s.target_door_mid = Some(mid);
+            s.target_door_open = td_open;
         }
 
         // 2. Refresh Button and Obstacle Generation Interaction
@@ -862,9 +888,18 @@ async fn main() {
 
         // Draw Dynamic Doors
         for door in &doors {
+            if door.is_external {
+                continue; // external doors are invisible (treated as solid walls)
+            }
             let (sx1, sy1) = to_screen(door.p1.x, door.p1.y);
             let (sx2, sy2) = to_screen(door.p2.x, door.p2.y);
-            if door.is_open {
+            if door.is_target {
+                // Pulsing gold highlight for target exit door
+                let pulse = (get_time() as f32 * 3.0).sin() * 0.5 + 0.5;
+                let alpha = (150.0 + pulse * 105.0) as u8;
+                draw_line(sx1, sy1, sx2, sy2, 8.0, Color::from_rgba(255, 200, 0, 40));
+                draw_line(sx1, sy1, sx2, sy2, 4.0, Color::from_rgba(255, 200, 0, alpha));
+            } else if door.is_open {
                 // Draw dashed green line for open
                 let steps = 4;
                 for i in 0..steps {
@@ -956,6 +991,23 @@ async fn main() {
             Color::from_rgba(255, 60, 80, 255)
         };
         draw_text(&door_status_text, 250.0, 65.0, 18.0, door_status_color);
+
+        // Target door proximity indicator
+        if let Some(td) = doors.iter().find(|d| d.is_target) {
+            let mid = (td.p1 + td.p2) * 0.5;
+            let dist = Vec2::new(rx, ry).distance(mid);
+            if dist < 1500.0 {
+                let pulse = (get_time() as f32 * 4.0).sin() * 0.5 + 0.5;
+                let alpha = (180.0 + pulse * 75.0) as u8;
+                draw_text(
+                    &format!("★ TARGET DOOR NEARBY  ({:.0} mm)", dist),
+                    250.0,
+                    90.0,
+                    18.0,
+                    Color::from_rgba(255, 200, 0, alpha),
+                );
+            }
+        }
 
         // 3. Status Information Text
         let x_cm = rx / 10.0;

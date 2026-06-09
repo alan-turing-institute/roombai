@@ -1844,41 +1844,41 @@ pub fn get_walls() -> Vec<Segment> {
     walls.push(Segment { p1: pdf_pt(1290.85, 798.87), p2: pdf_pt(1291.33, 798.87) });
     walls.push(Segment { p1: pdf_pt(1291.33, 796.93), p2: pdf_pt(1289.77, 798.87) });
     walls.push(Segment { p1: pdf_pt(1289.66, 796.93), p2: pdf_pt(1289.77, 796.89) });
+    walls.push(Segment { p1: pdf_pt(1256.64, 714.48), p2: pdf_pt(1269.90, 714.48) }); // Replaced Door 19
+    walls.push(Segment { p1: pdf_pt(1108.70, 629.01), p2: pdf_pt(1108.70, 648.17) }); // Replaced Door 29
     walls
 }
 
 pub fn get_doors() -> Vec<Door> {
     vec![
-        Door { name: "Door 0".into(), p1: pdf_pt(156.43, 687.06), p2: pdf_pt(209.41, 687.06), is_open: true, is_top_door: false },
-        Door { name: "Door 1".into(), p1: pdf_pt(223.04, 707.25), p2: pdf_pt(223.04, 771.30), is_open: true, is_top_door: false },
-        Door { name: "Door 2".into(), p1: pdf_pt(233.92, 655.74), p2: pdf_pt(233.92, 694.78), is_open: true, is_top_door: false },
-        Door { name: "Door 3".into(), p1: pdf_pt(212.61, 776.32), p2: pdf_pt(212.61, 789.58), is_open: false, is_top_door: true },
-        Door { name: "Door 4".into(), p1: pdf_pt(661.97, 622.26), p2: pdf_pt(661.97, 655.57), is_open: true, is_top_door: false },
-        Door { name: "Door 5".into(), p1: pdf_pt(715.64, 774.42), p2: pdf_pt(747.58, 774.42), is_open: false, is_top_door: true },
-        Door { name: "Door 6".into(), p1: pdf_pt(877.91, 741.77), p2: pdf_pt(877.91, 776.73), is_open: false, is_top_door: true },
-        Door { name: "Door 7".into(), p1: pdf_pt(810.48, 744.08), p2: pdf_pt(855.21, 744.08), is_open: false, is_top_door: true },
-        Door { name: "Door 8".into(), p1: pdf_pt(747.58, 744.08), p2: pdf_pt(792.00, 744.08), is_open: false, is_top_door: true },
-        Door { name: "Door 9".into(), p1: pdf_pt(893.80, 698.28), p2: pdf_pt(893.80, 711.54), is_open: true, is_top_door: false },
-        Door { name: "Door 10".into(), p1: pdf_pt(867.61, 596.31), p2: pdf_pt(867.61, 609.57), is_open: true, is_top_door: false },
-        Door { name: "Door 11".into(), p1: pdf_pt(686.51, 622.26), p2: pdf_pt(686.51, 652.97), is_open: true, is_top_door: false },
-        Door { name: "Door 12".into(), p1: pdf_pt(867.61, 485.82), p2: pdf_pt(867.61, 499.08), is_open: true, is_top_door: false },
-        Door { name: "Door 13".into(), p1: pdf_pt(983.95, 618.48), p2: pdf_pt(1031.84, 618.48), is_open: true, is_top_door: false },
-        Door { name: "Door 14".into(), p1: pdf_pt(799.07, 653.47), p2: pdf_pt(812.33, 653.47), is_open: true, is_top_door: false },
-        Door { name: "Door 15".into(), p1: pdf_pt(1005.32, 444.87), p2: pdf_pt(1031.84, 444.87), is_open: true, is_top_door: false },
-        Door { name: "Door 16".into(), p1: pdf_pt(1166.09, 776.92), p2: pdf_pt(1166.09, 790.18), is_open: false, is_top_door: true },
-        Door { name: "Door 17".into(), p1: pdf_pt(1277.28, 747.04), p2: pdf_pt(1277.28, 760.30), is_open: false, is_top_door: true },
-        Door { name: "Door 18".into(), p1: pdf_pt(1353.78, 736.61), p2: pdf_pt(1385.02, 736.61), is_open: true, is_top_door: false },
-        Door { name: "Door 19".into(), p1: pdf_pt(1256.64, 714.48), p2: pdf_pt(1269.90, 714.48), is_open: true, is_top_door: false },
-        Door { name: "Door 20".into(), p1: pdf_pt(1585.01, 744.08), p2: pdf_pt(1598.27, 744.08), is_open: false, is_top_door: true },
-        Door { name: "Door 21".into(), p1: pdf_pt(1277.65, 808.15), p2: pdf_pt(1277.65, 821.41), is_open: false, is_top_door: true },
-        Door { name: "Door 22".into(), p1: pdf_pt(166.71, 594.72), p2: pdf_pt(193.23, 594.72), is_open: true, is_top_door: false },
-        Door { name: "Door 23".into(), p1: pdf_pt(250.17, 624.57), p2: pdf_pt(281.51, 624.57), is_open: true, is_top_door: false },
-        Door { name: "Door 24".into(), p1: pdf_pt(359.13, 624.57), p2: pdf_pt(390.47, 624.57), is_open: true, is_top_door: false },
-        Door { name: "Door 25".into(), p1: pdf_pt(468.17, 624.57), p2: pdf_pt(499.51, 624.57), is_open: true, is_top_door: false },
-        Door { name: "Door 26".into(), p1: pdf_pt(558.35, 729.72), p2: pdf_pt(558.35, 742.98), is_open: true, is_top_door: false },
-        Door { name: "Door 27".into(), p1: pdf_pt(558.35, 683.42), p2: pdf_pt(558.35, 696.68), is_open: true, is_top_door: false },
-        Door { name: "Door 28".into(), p1: pdf_pt(558.35, 638.66), p2: pdf_pt(558.35, 651.92), is_open: true, is_top_door: false },
-        Door { name: "Door 29".into(), p1: pdf_pt(1108.70, 629.01), p2: pdf_pt(1108.70, 648.17), is_open: true, is_top_door: false },
+        Door { name: "Door 0".into(), p1: pdf_pt(156.43, 687.06), p2: pdf_pt(209.41, 687.06), is_open: true, is_top_door: false, is_external: false, is_target: false },
+        Door { name: "Door 1".into(), p1: pdf_pt(223.04, 707.25), p2: pdf_pt(223.04, 771.30), is_open: true, is_top_door: false, is_external: false, is_target: false },
+        Door { name: "Door 2".into(), p1: pdf_pt(233.92, 655.74), p2: pdf_pt(233.92, 694.78), is_open: true, is_top_door: false, is_external: false, is_target: false },
+        Door { name: "Door 3".into(), p1: pdf_pt(212.61, 776.32), p2: pdf_pt(212.61, 789.58), is_open: false, is_top_door: true, is_external: false, is_target: false },
+        Door { name: "Door 4".into(), p1: pdf_pt(661.97, 622.26), p2: pdf_pt(661.97, 655.57), is_open: true, is_top_door: false, is_external: false, is_target: false },
+        Door { name: "Door 5".into(), p1: pdf_pt(715.64, 774.42), p2: pdf_pt(747.58, 774.42), is_open: false, is_top_door: true, is_external: false, is_target: false },
+        Door { name: "Door 6".into(), p1: pdf_pt(877.91, 741.77), p2: pdf_pt(877.91, 776.73), is_open: false, is_top_door: true, is_external: false, is_target: false },
+        Door { name: "Door 7".into(), p1: pdf_pt(810.48, 744.08), p2: pdf_pt(855.21, 744.08), is_open: false, is_top_door: true, is_external: false, is_target: false },
+        Door { name: "Door 8".into(), p1: pdf_pt(747.58, 744.08), p2: pdf_pt(792.00, 744.08), is_open: false, is_top_door: true, is_external: false, is_target: false },
+        Door { name: "Door 9".into(), p1: pdf_pt(893.80, 698.28), p2: pdf_pt(893.80, 711.54), is_open: true, is_top_door: false, is_external: false, is_target: false },
+        Door { name: "Door 10".into(), p1: pdf_pt(867.61, 596.31), p2: pdf_pt(867.61, 609.57), is_open: true, is_top_door: false, is_external: false, is_target: false },
+        Door { name: "Door 11".into(), p1: pdf_pt(686.51, 622.26), p2: pdf_pt(686.51, 652.97), is_open: true, is_top_door: false, is_external: false, is_target: false },
+        Door { name: "Door 12".into(), p1: pdf_pt(867.61, 485.82), p2: pdf_pt(867.61, 499.08), is_open: true, is_top_door: false, is_external: false, is_target: false },
+        Door { name: "Door 13".into(), p1: pdf_pt(983.95, 618.48), p2: pdf_pt(1031.84, 618.48), is_open: true, is_top_door: false, is_external: false, is_target: false },
+        Door { name: "Door 14".into(), p1: pdf_pt(799.07, 653.47), p2: pdf_pt(812.33, 653.47), is_open: true, is_top_door: false, is_external: false, is_target: false },
+        Door { name: "Door 15".into(), p1: pdf_pt(1005.32, 444.87), p2: pdf_pt(1031.84, 444.87), is_open: true, is_top_door: false, is_external: false, is_target: false },
+        Door { name: "Door 16".into(), p1: pdf_pt(1166.09, 776.92), p2: pdf_pt(1166.09, 790.18), is_open: false, is_top_door: true, is_external: false, is_target: false },
+        Door { name: "Door 17".into(), p1: pdf_pt(1277.28, 747.04), p2: pdf_pt(1277.28, 760.30), is_open: false, is_top_door: true, is_external: false, is_target: false },
+        Door { name: "Door 18".into(), p1: pdf_pt(1353.78, 736.61), p2: pdf_pt(1385.02, 736.61), is_open: true, is_top_door: false, is_external: false, is_target: false },
+        Door { name: "Door 20".into(), p1: pdf_pt(1585.01, 744.08), p2: pdf_pt(1598.27, 744.08), is_open: false, is_top_door: true, is_external: false, is_target: false },
+        Door { name: "Door 21".into(), p1: pdf_pt(1277.65, 808.15), p2: pdf_pt(1277.65, 821.41), is_open: false, is_top_door: true, is_external: false, is_target: false },
+        Door { name: "Door 22".into(), p1: pdf_pt(166.71, 594.72), p2: pdf_pt(193.23, 594.72), is_open: true, is_top_door: false, is_external: false, is_target: false },
+        Door { name: "Door 23".into(), p1: pdf_pt(250.17, 624.57), p2: pdf_pt(281.51, 624.57), is_open: true, is_top_door: false, is_external: false, is_target: false },
+        Door { name: "Door 24".into(), p1: pdf_pt(359.13, 624.57), p2: pdf_pt(390.47, 624.57), is_open: true, is_top_door: false, is_external: false, is_target: false },
+        Door { name: "Door 25".into(), p1: pdf_pt(468.17, 624.57), p2: pdf_pt(499.51, 624.57), is_open: true, is_top_door: false, is_external: false, is_target: false },
+        Door { name: "Door 26".into(), p1: pdf_pt(558.35, 729.72), p2: pdf_pt(558.35, 742.98), is_open: true, is_top_door: false, is_external: false, is_target: false },
+        Door { name: "Door 27".into(), p1: pdf_pt(558.35, 683.42), p2: pdf_pt(558.35, 696.68), is_open: true, is_top_door: false, is_external: false, is_target: false },
+        Door { name: "Door 28".into(), p1: pdf_pt(558.35, 638.66), p2: pdf_pt(558.35, 651.92), is_open: true, is_top_door: false, is_external: false, is_target: false },
     ]
 }
 
