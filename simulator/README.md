@@ -49,6 +49,33 @@ The simulator maintains three coordinate systems to bridge the physical layout, 
 *   **Smooth Waypoint Pathfinding:** Humans do not walk in straight lines through walls. They route themselves using waypoint nodes situated at room door exits, connecting rooms to the central horizontal corridor ($Y \approx 730$).
 *   **Anti-Stuck Logic:** If a human gets blocked by a closed door, the Roomba, or another human (velocity drops below threshold), they will immediately pick a new destination and replan a path.
 
+#### 🚶‍♂️ Detailed Human Movement & Pathfinding Strategy
+
+To simulate realistic office behavior and prevent humans from constantly walking into walls or oscillating on the spot, the simulator implements a multi-stage movement and target planning system:
+
+1. **Target Selection (Markov Chain)**:
+   A human is either marked as being associated with Enigma or not.
+   * If currently targeting an Enigma location, they have a $60\%$ chance to choose another Enigma target, and a $40\%$ chance to transition to a non-Enigma room target.
+   * If currently targeting a non-Enigma location, they have a $60\%$ chance to choose another non-Enigma target, and a $40\%$ chance to transition to Enigma.
+   This maintains a dynamic equilibrium of approximately $50\%$ of humans in the Enigma room at any time.
+
+2. **Waypoint Route Planning (`plan_path`)**:
+   Instead of walking in a straight line from their current location to the target (which would cause them to collide with walls), a path of waypoints is generated:
+   * **Exit Waypoint**: The human first targets the door exit node of their current room.
+   * **Corridor Alignment**: They transition to the central horizontal corridor ($Y \approx 730$).
+   * **Target Entry Alignment**: They walk horizontally along the corridor to align with the target room's entryway.
+   * **Entry Waypoint**: They enter the target room through its door waypoint.
+   * **Final Destination**: They walk directly to the final target location.
+   This sequence of waypoints allows smooth transitions between any two rooms in the office.
+
+3. **Collision & Movement Updates**:
+   At each simulation step (sub-stepped at 5ms intervals for precision), the human moves toward the next waypoint in their path.
+   * A sliding collision resolution algorithm (`resolve_pos_collisions_with_map`) is applied to push the human out of walls, closed doors, or other entities.
+   * When they get within $300\text{ mm}$ of a waypoint, it is popped from the path queue, and they begin targeting the next waypoint.
+
+4. **Stuck Detection**:
+   If a human's actual step distance is less than $10 \text{ mm/s}$ equivalent (meaning they are blocked by a closed door, the Roomba, or another human), the stuck detector triggers. They immediately clear their path queue, select a new random target, and plan a new route, avoiding infinite blockages.
+
 ### 5. Roomba (The Robot)
 *   **Dimensions:** $340\text{ mm}$ diameter ($170\text{ mm}$ radius). Starts in the middle of Enigma.
 *   **Collision Resolution:** Employs sliding multi-pass collision solver against walls, closed doors, obstacles, and humans.
