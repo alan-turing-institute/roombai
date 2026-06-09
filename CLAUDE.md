@@ -53,6 +53,37 @@ Default port: `127.0.0.1:9999`. The robot **must be powered on before the daemon
 
 `rpicam-still` and `rpicam-hello` can be used to capture still or video, respectively.
 
+#### Frame recording during escape attempts
+
+The Executor must capture a still at every decision point and save it — with an elapsed-time overlay — to a per-attempt directory:
+
+```bash
+# At the start of each attempt: create frame directory and record start time
+mkdir -p /tmp/escape_attempt_N/frames
+START_TIME=$(date +%s)
+
+# At each decision point (FRAME_IDX is a zero-padded counter: 0001, 0002, …):
+ELAPSED=$(( $(date +%s) - START_TIME ))
+ELAPSED_FMT=$(printf '%02d:%02d' $(( ELAPSED / 60 )) $(( ELAPSED % 60 )))
+rpicam-still -o /tmp/frame_raw.jpg --nopreview -t 1 2>/dev/null
+convert /tmp/frame_raw.jpg \
+  -fill white -stroke black -strokewidth 1 \
+  -pointsize 36 -annotate +10+44 "${ELAPSED_FMT}" \
+  /tmp/escape_attempt_N/frames/frame_${FRAME_IDX}.jpg
+
+# After the attempt ends (success or abort), stitch into a timelapse video
+TOTAL=$(( $(date +%s) - START_TIME ))
+ffmpeg -y -framerate 2 -pattern_type glob -i '/tmp/escape_attempt_N/frames/*.jpg' \
+  -c:v libx264 -pix_fmt yuv420p /tmp/escape_attempt_N/timelapse.mp4
+echo "Attempt duration: $(printf '%02d:%02d' $(( TOTAL / 60 )) $(( TOTAL % 60 )))" \
+  >> /tmp/execution_log.txt
+```
+
+- `convert` is from ImageMagick (pre-installed on Raspberry Pi OS); it burns `MM:SS` elapsed time into the top-left corner of each still before saving.
+- The Executor should log the frame filename and elapsed time alongside each entry in `/tmp/execution_log.txt` so frames are traceable to decisions.
+- Stitching runs once at the very end of the attempt (not during motion).
+- The total attempt duration is written to the execution log on completion.
+
 ---
 
 ## Constraints
@@ -88,7 +119,7 @@ When asked to escape the room, act as **Orchestrator** and run a subagent team v
 
 **Strategist** — reads any attempt review files, calls Researcher as needed to inform its approach, then proposes the *simplest viable strategy not yet tried*, with explicit success criteria and abort conditions.
 
-**Executor** — implements the strategy via pilot commands and active camera use. Writes observations to `/tmp/execution_log.txt` as it goes. Runs until success, abort condition, or time limit.
+**Executor** — implements the strategy via pilot commands and active camera use. At each decision point captures a still frame to `/tmp/escape_attempt_N/frames/` and logs the filename alongside the observation in `/tmp/execution_log.txt`. Stitches all frames into a timelapse video at the end of the attempt. Runs until success, abort condition, or time limit.
 
 **Critic** — monitors `/tmp/execution_log.txt` in parallel with the Executor, delivers verdicts: `CONTINUE` / `ITERATE` / `ABANDON`. Must answer: *is this strategy converging, or fundamentally flawed?* Slow progress that is genuinely getting closer = CONTINUE. Not converging = ABANDON with a concrete diagnosis of why and what a better strategy would need to do differently.
 
