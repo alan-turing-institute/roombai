@@ -174,3 +174,28 @@ The `runs/` folder is in .gitignore so none of this is committed to git.
 - If a required model cannot be downloaded: show the manual download
   instructions printed by `ensure_models()` (they include the exact
   `hailomz download` command and fallback HEF placement path).
+
+### Missing dependency handling during a run
+
+If `check_deps.py` or any step reports a missing Python package or import error:
+
+1. **Identify the package** from the error (e.g. `ModuleNotFoundError: No module named 'foo'`).
+2. **Attempt installation** on the Pi via SSH (venv must be active):
+   ```
+   sshpass -p aipi ssh -o StrictHostKeyChecking=no <pi_host> \
+     "source ~/yolo_new/bin/activate && pip install <package>"
+   ```
+   If pip fails, try apt:
+   ```
+   sshpass -p aipi ssh -o StrictHostKeyChecking=no <pi_host> \
+     "sudo apt-get install -y python3-<package>"
+   ```
+   If the package lives locally (e.g. hailo-model-zoo at ~/hailo-model-zoo):
+   ```
+   sshpass -p aipi ssh -o StrictHostKeyChecking=no <pi_host> \
+     "source ~/yolo_new/bin/activate && pip install ~/hailo-model-zoo"
+   ```
+3. **If installation succeeded**: tell the user what was installed, then
+   restart the run from step 4 (clear /tmp/ and re-run run.sh).
+4. **If installation failed**: report the exact error to the user, explain
+   what was tried, and ask for guidance before retrying.

@@ -48,9 +48,21 @@ step() { echo ""; echo "── $* ───────────────�
 ok()   { echo "  ✓ $*"; }
 fail() { echo "  ✗ $*" >&2; exit 1; }
 
-# ── Step 0: Install tools + download missing HEF files ───────────────────────
-step "Step 0 — Model installer (hailo-model-zoo tools + missing HEFs)"
+# ── Step 0a: Python dependency check + auto-install ──────────────────────────
+step "Step 0a — Python dependency check"
+if ! python3 "$REPO_DIR/check_deps.py"; then
+    fail "Critical Python dependencies missing and could not be installed. See above."
+fi
+
+# ── Step 0b: Install tools + download missing HEF files ───────────────────────
+step "Step 0b — Model installer (hailo-model-zoo tools + missing HEFs)"
 bash "$REPO_DIR/install_models.sh"
+
+# Re-run dependency check after installs in case something was just added
+step "Step 0c — Re-check dependencies after model install"
+if ! python3 "$REPO_DIR/check_deps.py"; then
+    fail "Critical dependencies still missing after install attempt."
+fi
 
 # ── Step 1: Vision model check ────────────────────────────────────────────────
 step "Step 1 — Vision model check (validate all HEFs via Hailo SDK)"
