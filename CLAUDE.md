@@ -88,6 +88,18 @@ echo "Attempt duration: $(printf '%02d:%02d' $(( TOTAL / 60 )) $(( TOTAL % 60 ))
 
 ---
 
+## OneDrive upload
+
+After a run, upload the attempt directory manually using the provided script:
+
+```bash
+./upload_run.sh /tmp/escape_attempt_N
+```
+
+See `upload_run.sh` for setup instructions (one-time `rclone config` required).
+
+---
+
 ## Constraints
 
 ### No external LLM API
@@ -113,6 +125,126 @@ obstacles encountered, waiting states, and arrival confirmation.
 
 ---
 
-## Escape Strategy
+## Escape Protocol
 
+When asked to escape the room, act as **Orchestrator** and run a subagent team via the `Agent` tool. The protocol follows three phases per attempt — Scout, Navigate, Confirm — with a Critic running in parallel during Navigate. Loop across attempts until escape is confirmed or human input is needed.
 
+---
+
+### Pre-flight: create run directory & read git identity
+
+At the very start of each attempt, create the run directory and read identity from git:
+
+```bash
+# Determine attempt number from how many attempt dirs already exist
+ATTEMPT_N=$(( $(ls -d /tmp/escape_attempt_* 2>/dev/null | wc -l) + 1 ))
+ATTEMPT_DIR=/tmp/escape_attempt_${ATTEMPT_N}
+mkdir -p "${ATTEMPT_DIR}/frames"
+
+# Identity — pilots work on a branch named after themselves, e.g. alice/attempt-1
+PILOT_NAME=$(git -C /path/to/roombai rev-parse --abbrev-ref HEAD)
+COMMIT_HASH=$(git -C /path/to/roombai rev-parse --short HEAD)
+START_TIME=$(date +%s)
+TOOL_CALLS=0
+DECISIONS=0
+```
+
+Initialise counters — the Orchestrator increments these throughout the run:
+- `TOOL_CALLS` — increment by 1 each time a `pilot send` command is issued
+- `DECISIONS` — increment by 1 each time a camera frame is analysed for navigation
+
+---
+
+### Run metadata file
+
+At the end of the attempt, write a `metadata.json` into the run directory before uploading:
+
+```bash
+DURATION_S=$(( $(date +%s) - START_TIME ))
+
+cat > "${ATTEMPT_DIR}/metadata.json" <<EOF
+{
+  "name":       "${PILOT_NAME}",
+  "commit":     "${COMMIT_HASH}",
+  "date":       "$(date +%Y-%m-%d)",
+  "duration_s": ${DURATION_S},
+  "tool_calls": ${TOOL_CALLS},
+  "decisions":  ${DECISIONS},
+  "outcome":    "${OUTCOME}"
+}
+EOF
+```
+
+Replace `/path/to/roombai` with the actual absolute path to the project root.
+
+---
+
+### Phase 1 — Scout
+
+**Goal:** determine the door's bearing *before* any forward motion.
+
+The Executor spins 360° in place, capturing a frame every ~30° (12 frames total). It then analyses all frames together to:
+- Identify which frame(s) show an open door or doorframe gap
+- Estimate the door's bearing relative to current heading (0° = forward)
+- Note any large obstacles between the robot and the door
+
+Output: a `scout_result` logged to `/tmp/execution_log.txt`:
+```
+scout: door_bearing=<deg> door_confidence=<0-1> obstacles=<description>
+```
+
+If no door is found with confidence ≥ 0.5, rotate an additional 180° and repeat once before escalating to the Critic.
+
+---
+
+### Phase 2 — Navigate
+
+**Goal:** reach the door using short move-and-reassess bursts.
+
+The Executor runs a tight loop:
+
+1. **Turn** to align with current best door bearing
+2. **Move forward 30 cm** (use `move 30`)
+3. **Capture frame**, re-assess:
+   - Door visible and closer → update bearing, continue
+   - Obstacle ahead → turn away, re-scan with a 90° sweep to reacquire door
+   - Door lost entirely → run a mini-scout (180° sweep) to reacquire
+4. **Check bumpers** after every move (`bumps`); if bumped, back up 10 cm and turn 30° away from bump side before continuing
+5. Log every step: frame filename, elapsed time, bearing, confidence, action taken
+
+The **Critic** runs in parallel, tailing `/tmp/execution_log.txt`. It delivers verdicts:
+- `CONTINUE` — bearing is converging, door confidence is rising, or obstacle avoidance is working
+- `ITERATE` — stuck in a local loop (same bearing ±10° for 3+ steps with no progress); recommend a specific corrective turn
+- `ABANDON` — fundamentally not converging (door never found, repeated bumps in all directions, battery critical); provide a concrete diagnosis
+
+Time limit per Navigate phase: **3 minutes**. Critic must ABANDON if time limit is exceeded.
+
+---
+
+### Phase 3 — Confirm
+
+**Goal:** verify the robot has passed through the door.
+
+Triggered when the door fills >50% of the camera frame. The Executor:
+
+1. Slows to `move 20` (20 cm bursts) and moves through the doorframe
+2. Captures a frame immediately after crossing; compares it to the scout frames — if the scene is clearly different (corridor, different room, open space) → **ESCAPED**
+3. As a secondary signal: if the robot travels the expected door width (~80 cm) without a bump, that confirms crossing
+
+On confirmed escape:
+- Speak "Escape successful"
+- Stop motors (`stop`)
+- Stitch timelapse and log total duration
+- Set `OUTCOME="escaped"`, write `metadata.json` into the run directory
+
+---
+
+### Outer loop (across attempts)
+
+After each attempt:
+1. Write `attempt_N_review.md` summarising: scout findings, navigation trace, Critic verdicts, why it succeeded or failed.
+2. If the attempt ended in ABANDON/timeout, set `OUTCOME="dnf"`, write `metadata.json` into the run directory.
+
+On failure, the **Strategist** reads all review files and proposes the next attempt's adjustments (e.g. different scout granularity, obstacle avoidance strategy, speed). The **Researcher** is called by the Strategist only between attempts — never during active motion.
+
+**Loop:** Scout → [Navigate ∥ Critic] → Confirm → if failed, Strategist (+ Researcher) → next attempt.
