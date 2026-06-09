@@ -35,42 +35,18 @@ else
     fi
 fi
 
-# ── 2. Configure Claude Code to use ~/yolo_new venv for this project ─────────
-# We do NOT touch ~/.claude/settings.json (global) because that would hijack
-# the venv for every other project on the Pi.
+# ── 2. Venv integration ───────────────────────────────────────────────────────
+# Claude Code inherits the shell environment, so no settings file needs to be
+# touched. Each user simply activates their own venv before launching claude:
 #
-# Instead, write a project-level .claude/settings.json inside the repo that
-# is only active when Claude Code is launched from /home/hackweek26/roombai.
-# Claude Code merges project settings on top of user settings, so this is
-# scoped correctly.
+#   source ~/my_venv/bin/activate && claude
+#
+# run.sh already activates ~/yolo_new at the top, so Claude Code launched from
+# within that script automatically gets the right Python. Writing venv paths
+# into any settings.json (global or project-level) would interfere with other
+# users who share this repo directory and use different venvs.
 
-if [[ ! -d "$VENV" ]]; then
-    warn "venv not found at $VENV — skipping venv configuration"
-    exit 0
-fi
-
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_SETTINGS="$REPO_DIR/.claude/settings.local.json"
-VENV_BIN="$VENV/bin"
-SYSTEM_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-
-mkdir -p "$(dirname "$PROJECT_SETTINGS")"
-
-# Merge with any existing project settings.json; preserve other keys.
-python3 - <<PYEOF
-import json, pathlib
-
-path = pathlib.Path("$PROJECT_SETTINGS")
-data = json.loads(path.read_text()) if path.exists() else {}
-
-data.setdefault("env", {})
-data["env"]["VIRTUAL_ENV"] = "$VENV"
-data["env"]["PATH"]        = "$VENV_BIN:$SYSTEM_PATH"
-
-path.write_text(json.dumps(data, indent=2))
-print(f"  · Updated {path}")
-PYEOF
-
-ok "Claude Code configured for this project to use venv at $VENV"
-ok "(project-scoped — other projects on the Pi are unaffected)"
-info "Start Claude Code from the repo root:  cd $REPO_DIR && claude"
+ok "Claude Code uses whichever venv is active in the shell — no config needed"
+info "To use with yolo_new:  source ~/yolo_new/bin/activate && claude"
+info "(run.sh activates ~/yolo_new automatically, so Claude Code launched"
+info " from within a run already has the correct Python environment)"
