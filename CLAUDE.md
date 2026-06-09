@@ -42,12 +42,12 @@ Use `rpicam-still` to capture frames. The camera is mounted **upside down** — 
 
 At the start of the run:
 ```bash
-source ./init_run.sh
+source ./scripts/init_run.sh
 ```
 
 At every decision point (captures a timestamped frame and increments `FRAME_IDX`):
 ```bash
-source ./capture_frame.sh
+source ./scripts/capture_frame.sh
 DECISIONS=$(( DECISIONS + 1 ))
 ```
 
@@ -55,7 +55,7 @@ Increment `TOOL_CALLS` by 1 each time a `pilot send` command is issued.
 
 At the end of the run:
 ```bash
-./finish_run.sh escaped   # or: ./finish_run.sh dnf
+./scripts/finish_run.sh escaped   # or: ./scripts/finish_run.sh dnf
 ```
 
 ---

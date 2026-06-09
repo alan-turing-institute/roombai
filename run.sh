@@ -14,7 +14,7 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 # ── Step 1: reset ────────────────────────────────────────────────────────────
 echo ""
 echo "━━━ Step 1/3 — Resetting state ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-source "${REPO_ROOT}/reset_run.sh"
+source "${REPO_ROOT}/scripts/reset_run.sh"
 
 # ── Step 2: Roomba check ─────────────────────────────────────────────────────
 echo ""
@@ -74,5 +74,5 @@ LATEST_ATTEMPT=$(ls -dt /tmp/escape_attempt_* 2>/dev/null | head -1)
 if [ -z "$LATEST_ATTEMPT" ]; then
     echo "  No attempt directory found in /tmp — nothing to upload."
 else
-    "${REPO_ROOT}/upload_run.sh" "$LATEST_ATTEMPT"
+    "${REPO_ROOT}/scripts/upload_run.sh" "$LATEST_ATTEMPT"
 fi
