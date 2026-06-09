@@ -901,11 +901,12 @@ fn dispatch(line: &str, state: &Arc<Mutex<RobotState>>) -> String {
             } else {
                 TURN_RATE_DEG_S
             };
-            let secs = (deg / rate).abs();
             let mut s = state.lock().unwrap();
-            s.vel = 0.0;
-            s.angular = rate.to_radians() as f32;
-            s.arm(Duration::from_secs_f64(secs));
+let speed_f64 = s.speed as f64;
+let secs = if speed_f64 != 0.0 { (deg / rate).abs() / speed_f64 } else { (deg / rate).abs() };
+s.vel = 0.0;
+s.angular = rate.to_radians() as f32;
+s.arm(Duration::from_secs_f64(secs));
             format!("OK turn {deg}deg (~{secs:.1}s)")
         }
 
