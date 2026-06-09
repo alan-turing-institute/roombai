@@ -69,6 +69,7 @@ struct Door {
 }
 
 const HUMAN_RADIUS_MM: f32 = 250.0; // 25 cm radius
+const MAX_TURN_ANGLE_DEG: f32 = 30.0; // maximum turn angle per second
 
 #[derive(Clone, Debug)]
 struct Human {
@@ -78,6 +79,7 @@ struct Human {
     speed: f32, // mm/s
     color: Color,
     is_enigma: bool,
+    heading: f32, // radians, direction of movement
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -471,6 +473,19 @@ fn is_segment_intersecting_map(p1: Vec2, p2: Vec2, walls: &[Segment], doors: &[D
     false
 }
 
+fn is_inside_building_bounds(pos: Vec2) -> bool {
+    let x = pos.x / PDF_TO_MM;
+    let y = pos.y / PDF_TO_MM;
+    
+    let b1 = (125.2..=536.84).contains(&x) && (566.09..=866.63).contains(&y);
+    let b2 = (536.84..=1277.65).contains(&x) && (624.57..=866.63).contains(&y);
+    let b3 = (1277.65..=1603.54).contains(&x) && (714.48..=866.63).contains(&y);
+    let b4 = (812.0..=1003.14).contains(&x) && (545.99..=744.08).contains(&y);
+    let b5 = (1003.14..=1108.83).contains(&x) && (444.87..=744.08).contains(&y);
+    
+    b1 || b2 || b3 || b4 || b5
+}
+
 fn pick_human_target(is_enigma: bool, room_labels: &[RoomLabel]) -> (Vec2, bool) {
     let roll = macroquad::rand::gen_range(0.0, 1.0);
     let target_is_enigma = if is_enigma {
@@ -502,32 +517,45 @@ fn get_waypoint_for_pos(pos: Vec2) -> Vec2 {
     let y = pos.y / PDF_TO_MM;
 
     if x >= 1277.65 {
-        // Enigma
-        pdf_pt(1260.0, 730.0)
+        // Enigma -> Exit via Door 17
+        pdf_pt(1260.0, 753.67)
     } else if x <= 225.0 && y >= 714.48 {
-        // Jack Good / David Blackwell
-        pdf_pt(240.0, 730.0)
+        // Jack Good / David Blackwell -> Exit via Door 1
+        pdf_pt(240.0, 739.0)
     } else if x <= 483.84 && y >= 744.08 {
-        // Marian Rejewski / Joan Clarke
-        pdf_pt(240.0, 730.0)
+        // Marian Rejewski / Joan Clarke -> Exit to corridor center
+        if x <= 370.0 {
+            pdf_pt(315.0, 730.0)
+        } else {
+            pdf_pt(425.0, 730.0)
+        }
     } else if x <= 731.77 && y >= 744.08 {
-        // Ada
-        pdf_pt(675.0, 730.0)
+        // Ada -> Exit via Door 5
+        pdf_pt(731.6, 730.0)
     } else if x <= 893.80 && y >= 744.08 {
-        // Lovelace
-        pdf_pt(800.0, 730.0)
+        // Lovelace -> Exit via Door 7
+        pdf_pt(832.8, 730.0)
     } else if x <= 1277.65 && y >= 744.08 {
-        // Margaret Hamilton / CEO Office
-        pdf_pt(1160.0, 730.0)
-    } else if x <= 536.84 && y <= 624.57 {
-        // Bottom left rooms (Cipher, Nightingale, etc.)
-        pdf_pt(510.0, 640.0)
+        // Margaret Hamilton / CEO Office -> Exit via Door 16
+        pdf_pt(1166.0, 730.0)
+    } else if x <= 321.2 && y <= 624.57 {
+        // Cipher / Mae Jemison -> Exit via Door 23
+        pdf_pt(265.8, 640.0)
+    } else if x <= 430.24 && y <= 624.57 {
+        // Florence Nightingale / Wellbeing -> Exit via Door 24
+        pdf_pt(374.8, 640.0)
+    } else if x <= 500.0 && y <= 624.57 {
+        // Media Suite -> Exit via Door 25
+        pdf_pt(483.8, 640.0)
+    } else if x <= 566.0 && y <= 624.57 {
+        // Project Space -> Exit via Door 28
+        pdf_pt(575.0, 645.0)
     } else if x <= 1003.14 && y <= 697.78 {
-        // Tea Point / Kitchen
-        pdf_pt(880.0, 640.0)
+        // Tea Point / Kitchen -> Exit via Door 13
+        pdf_pt(1008.0, 640.0)
     } else if x <= 1108.83 && y <= 623.96 {
-        // Ursula Franklin / Lobby
-        pdf_pt(1050.0, 640.0)
+        // Ursula Franklin / Lobby -> Exit via Door 13
+        pdf_pt(1008.0, 640.0)
     } else {
         // Default to corridor center
         pdf_pt(800.0, 730.0)
@@ -583,6 +611,7 @@ fn generate_humans(room_labels: &[RoomLabel], walls: &[Segment], doors: &[Door])
             speed,
             color: colors[i % colors.len()],
             is_enigma: is_en,
+            heading: (target - pos).to_angle(), // initial heading towards target
         });
     }
 
@@ -615,6 +644,9 @@ fn generate_humans(room_labels: &[RoomLabel], walls: &[Segment], doors: &[Door])
         if (pos - pos_mm).length_squared() > 1.0 {
             continue;
         }
+        if !is_inside_building_bounds(pos) {
+            continue;
+        }
 
         let (target, is_en) = pick_human_target(false, room_labels);
         let path = plan_path(pos, target);
@@ -627,6 +659,7 @@ fn generate_humans(room_labels: &[RoomLabel], walls: &[Segment], doors: &[Door])
             speed,
             color: colors[i_h % colors.len()],
             is_enigma: is_en,
+            heading: (target - pos).to_angle(), // initial heading towards target
         });
     }
 
@@ -686,6 +719,9 @@ fn generate_obstacles(
         if (resolved - pos_mm).length_squared() > 1.0 {
             continue;
         }
+        if !is_inside_building_bounds(pos_mm) {
+            continue;
+        }
 
         obstacles.push(Obstacle { center: pos_mm, radius });
     }
@@ -743,6 +779,9 @@ fn generate_obstacles(
         // Avoid spawning inside or too close to walls and doors
         let resolved = resolve_pos_collisions_with_map(pos_mm, radius + 100.0, walls, doors);
         if (resolved - pos_mm).length_squared() > 1.0 {
+            continue;
+        }
+        if !is_inside_building_bounds(pos_mm) {
             continue;
         }
 
@@ -1112,10 +1151,36 @@ async fn main() {
                     if dist < 300.0 {
                         human.path.remove(0);
                     } else {
-                        let dir = to_wp / dist;
-                        let candidate_pos = human.pos + dir * human.speed * step;
+                        let desired_dir = to_wp / dist;
+                        // Compute angle between current heading and desired direction
+                        let current_dir = Vec2::new(human.heading.cos(), human.heading.sin());
+                        let dot = current_dir.dot(desired_dir);
+                        let angle = dot.acos(); // angle in radians
+                        let max_angle = MAX_TURN_ANGLE_DEG.to_radians() * step; // limit per tick
+                        let new_dir = if angle > max_angle {
+                            // Rotate current_dir towards desired_dir by max_angle
+                            let cross = current_dir.x * desired_dir.y - current_dir.y * desired_dir.x;
+                            let sign = if cross >= 0.0 { 1.0 } else { -1.0 };
+                            let sin_theta = sign * max_angle.sin();
+                            let cos_theta = max_angle.cos();
+                            Vec2::new(
+                                current_dir.x * cos_theta - current_dir.y * sin_theta,
+                                current_dir.x * sin_theta + current_dir.y * cos_theta,
+                            )
+                        } else {
+                            desired_dir
+                        };
+                        // Update heading
+                        human.heading = new_dir.to_angle();
+                        let candidate_pos = human.pos + new_dir * human.speed * step;
                         let resolved_pos = resolve_pos_collisions_with_map(candidate_pos, HUMAN_RADIUS_MM, &walls, &doors);
-                        if (resolved_pos - human.pos).length() < 10.0 * step {
+                        if !is_inside_building_bounds(resolved_pos) {
+                            // Blocked or going out of bounds, choose a new target and replan
+                            let (new_target, is_en) = pick_human_target(human.is_enigma, &room_labels);
+                            human.target = new_target;
+                            human.is_enigma = is_en;
+                            human.path = plan_path(human.pos, new_target);
+                        } else if (resolved_pos - human.pos).length() < 10.0 * step {
                             // Blocked or stuck, choose a new target and replan
                             let (new_target, is_en) = pick_human_target(human.is_enigma, &room_labels);
                             human.target = new_target;
