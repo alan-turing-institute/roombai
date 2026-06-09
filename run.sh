@@ -48,6 +48,14 @@ step() { echo ""; echo "── $* ───────────────�
 ok()   { echo "  ✓ $*"; }
 fail() { echo "  ✗ $*" >&2; exit 1; }
 
+# ── Step 0: Clear stale /tmp data from previous runs ─────────────────────────
+# Do this unconditionally so leftover frame files never corrupt the new run.
+step "Step 0 — Clearing stale /tmp run data"
+rm -rf /tmp/roomba_frames /tmp/roomba_maps /tmp/roomba_state.json \
+       /tmp/roomba_log.txt /tmp/roomba_events.json /tmp/speak_queue.txt \
+       /tmp/pilot.log 2>/dev/null || true
+ok "stale /tmp data cleared"
+
 # ── Step 0a: Python dependency check + auto-install ──────────────────────────
 step "Step 0a — Python dependency check"
 if ! python3 "$REPO_DIR/check_deps.py"; then

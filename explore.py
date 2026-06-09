@@ -369,8 +369,15 @@ def camera_thread():
         except Exception:
             pass
 
-        for old in sorted(FRAME_DIR.glob("frame_*.jpg"))[:-20]:
-            old.unlink(missing_ok=True)
+        # Delete frames older than 20 behind the CURRENT frame_num so that
+        # stale high-numbered frames from a previous run never cause the
+        # current frame to be deleted.
+        for old in FRAME_DIR.glob("frame_*.jpg"):
+            try:
+                if int(old.stem.split("_")[-1]) < frame_num - 20:
+                    old.unlink(missing_ok=True)
+            except (ValueError, IndexError):
+                pass
 
         state_set(frames_captured=frame_num)
 
