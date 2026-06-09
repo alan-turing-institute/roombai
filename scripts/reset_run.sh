@@ -23,26 +23,9 @@ else
     echo "  Claude project memory dir not found — skipping ($CLAUDE_PROJECT_DIR)"
 fi
 
-# 2. Clear escape attempt directories from /tmp
-ATTEMPT_DIRS=( $(ls -d /tmp/escape_attempt_* 2>/dev/null || true) )
-if [ ${#ATTEMPT_DIRS[@]} -gt 0 ]; then
-    rm -rf "${ATTEMPT_DIRS[@]}"
-    echo "✓ Removed ${#ATTEMPT_DIRS[@]} attempt director(ies) from /tmp"
-else
-    echo "  No attempt directories found in /tmp — skipping"
-fi
-
-# 3. Clear execution log
-if [ -f /tmp/execution_log.txt ]; then
-    rm -f /tmp/execution_log.txt
-    echo "✓ Cleared /tmp/execution_log.txt"
-fi
-
-# 4. Clear TTS queue
-if [ -f /tmp/speak_queue.txt ]; then
-    truncate -s 0 /tmp/speak_queue.txt
-    echo "✓ Cleared /tmp/speak_queue.txt"
-fi
+# 2. Clear everything in /tmp
+find /tmp -mindepth 1 -delete 2>/dev/null || true
+echo "✓ Cleared /tmp"
 
 echo ""
-echo "Ready. Start the pilot daemon and run /escape."
+echo "Reset complete."
