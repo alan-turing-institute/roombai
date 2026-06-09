@@ -68,6 +68,16 @@ struct Door {
     is_target: bool,
 }
 
+const HUMAN_RADIUS_MM: f32 = 250.0; // 25 cm radius
+
+#[derive(Clone, Copy, Debug)]
+struct Human {
+    pos: Vec2,
+    target: Vec2,
+    speed: f32, // mm/s
+    color: Color,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct Obstacle {
     center: Vec2,
@@ -131,7 +141,7 @@ impl RobotState {
         self.deadline = None;
     }
 
-    fn update(&mut self, dt: f32, walls: &[Segment], doors: &[Door], obstacles: &[Obstacle]) {
+    fn update(&mut self, dt: f32, walls: &[Segment], doors: &[Door], obstacles: &[Obstacle], humans: &[Human]) {
         if let Some(d) = self.deadline {
             if Instant::now() >= d {
                 self.stop();
@@ -206,6 +216,25 @@ impl RobotState {
                 }
             }
 
+            // 4. Humans
+            for human in humans {
+                let to_human = current_pos - human.pos;
+                let dist_sq = to_human.length_squared();
+                let min_dist = ROOMBA_RADIUS_MM + HUMAN_RADIUS_MM;
+                if dist_sq < min_dist * min_dist {
+                    let dist = dist_sq.sqrt();
+                    let normal = if dist > 1e-4 { to_human / dist } else { Vec2::new(1.0, 0.0) };
+                    let depth = min_dist - dist;
+                    new_x += normal.x * depth;
+                    new_y += normal.y * depth;
+                    collision_resolved = true;
+
+                    let (bl, br) = calculate_bumps(self.heading, normal);
+                    bump_l |= bl;
+                    bump_r |= br;
+                }
+            }
+
             if !collision_resolved {
                 break;
             }
@@ -258,6 +287,39 @@ fn resolve_segment_collision(center: Vec2, radius: f32, p1: Vec2, p2: Vec2) -> O
     }
 }
 
+// Resolve sliding collision of a circle against walls and closed/external doors
+fn resolve_pos_collisions_with_map(
+    pos: Vec2,
+    radius: f32,
+    walls: &[Segment],
+    doors: &[Door],
+) -> Vec2 {
+    let mut new_pos = pos;
+    for _ in 0..4 {
+        let mut collision_resolved = false;
+        for wall in walls {
+            if let Some((normal, closest_pt)) = resolve_segment_collision(new_pos, radius, wall.p1, wall.p2) {
+                let depth = radius - (new_pos - closest_pt).length();
+                new_pos += normal * depth;
+                collision_resolved = true;
+            }
+        }
+        for door in doors {
+            if !door.is_open || door.is_external {
+                if let Some((normal, closest_pt)) = resolve_segment_collision(new_pos, radius, door.p1, door.p2) {
+                    let depth = radius - (new_pos - closest_pt).length();
+                    new_pos += normal * depth;
+                    collision_resolved = true;
+                }
+            }
+        }
+        if !collision_resolved {
+            break;
+        }
+    }
+    new_pos
+}
+
 // Decide bump sensor flags based on collision normal and robot heading
 fn calculate_bumps(heading: f32, normal: Vec2) -> (bool, bool) {
     let h_vec = Vec2::new(heading.cos(), heading.sin());
@@ -288,6 +350,7 @@ fn cast_ray(
     walls: &[Segment],
     doors: &[Door],
     obstacles: &[Obstacle],
+    humans: &[Human],
 ) -> f32 {
     let mut min_t = 100000.0; // 100 meters default max range
 
@@ -311,6 +374,14 @@ fn cast_ray(
 
     for obs in obstacles {
         if let Some(t) = ray_intersect_circle(origin, dir, obs.center, obs.radius) {
+            if t < min_t {
+                min_t = t;
+            }
+        }
+    }
+
+    for human in humans {
+        if let Some(t) = ray_intersect_circle(origin, dir, human.pos, HUMAN_RADIUS_MM) {
             if t < min_t {
                 min_t = t;
             }
@@ -356,8 +427,52 @@ fn ray_intersect_circle(origin: Vec2, dir: Vec2, center: Vec2, radius: f32) -> O
     }
 }
 
-// Generate random obstacles avoiding start area and doors
-fn generate_obstacles(roomba_start: Vec2) -> Vec<Obstacle> {
+// Distance from a point to a line segment
+fn dist_to_segment(p: Vec2, p1: Vec2, p2: Vec2) -> f32 {
+    let segment = p2 - p1;
+    let to_p = p - p1;
+    let seg_len_sq = segment.length_squared();
+    if seg_len_sq < 1e-6 {
+        return to_p.length();
+    }
+    let t = (to_p.dot(segment) / seg_len_sq).clamp(0.0, 1.0);
+    let closest_point = p1 + t * segment;
+    (p - closest_point).length()
+}
+
+fn pick_random_room_pos(room_labels: &[RoomLabel]) -> Vec2 {
+    if room_labels.is_empty() {
+        return Vec2::new(1520.0 * PDF_TO_MM, 775.0 * PDF_TO_MM);
+    }
+    let idx = macroquad::rand::rand() as usize % room_labels.len();
+    room_labels[idx].pos
+}
+
+fn generate_humans(room_labels: &[RoomLabel]) -> Vec<Human> {
+    let colors = [
+        Color::from_rgba(255, 105, 180, 255), // Hot Pink
+        Color::from_rgba(218, 112, 214, 255), // Orchid
+        Color::from_rgba(186, 85, 211, 255),  // Medium Orchid
+        Color::from_rgba(147, 112, 219, 255), // Medium Slate Blue
+        Color::from_rgba(138, 43, 226, 255),  // Blue Violet
+    ];
+    let mut humans = Vec::new();
+    for i in 0..5 {
+        let pos = pick_random_room_pos(room_labels);
+        let target = pick_random_room_pos(room_labels);
+        let speed = macroquad::rand::gen_range(120.0, 180.0);
+        humans.push(Human {
+            pos,
+            target,
+            speed,
+            color: colors[i % colors.len()],
+        });
+    }
+    humans
+}
+
+// Generate random obstacles avoiding start area, doors, and walls
+fn generate_obstacles(roomba_start: Vec2, walls: &[Segment], doors: &[Door]) -> Vec<Obstacle> {
     let mut obstacles: Vec<Obstacle> = Vec::new();
     let spawn_zones = [
         // Top rooms (except Enigma)
@@ -369,7 +484,7 @@ fn generate_obstacles(roomba_start: Vec2) -> Vec<Obstacle> {
     ];
     
     // Core door locations to keep clear (in PDF units)
-    let doors = [
+    let door_centers = [
         Vec2::new(32.5, 800.0),
         Vec2::new(282.5, 800.0),
         Vec2::new(582.5, 800.0),
@@ -382,7 +497,7 @@ fn generate_obstacles(roomba_start: Vec2) -> Vec<Obstacle> {
     ];
     
     let mut attempts = 0;
-    while obstacles.len() < 18 && attempts < 400 {
+    while obstacles.len() < 18 && attempts < 800 {
         attempts += 1;
         let zone_idx = macroquad::rand::rand() as usize % spawn_zones.len();
         let (x_min, x_max, y_min, y_max) = spawn_zones[zone_idx];
@@ -391,6 +506,8 @@ fn generate_obstacles(roomba_start: Vec2) -> Vec<Obstacle> {
         let ry = y_min + macroquad::rand::gen_range(0.0, y_max - y_min);
         let pos_mm = Vec2::new(rx * PDF_TO_MM, ry * PDF_TO_MM);
         
+        let radius = macroquad::rand::gen_range(180.0, 250.0); // 18 to 25 cm radius (scale of chairs)
+
         // Don't spawn on top of starting position
         if (pos_mm - roomba_start).length() < 1600.0 {
             continue;
@@ -398,8 +515,8 @@ fn generate_obstacles(roomba_start: Vec2) -> Vec<Obstacle> {
         
         // Don't spawn blocking doorways
         let mut near_door = false;
-        for &door_pos in &doors {
-            let door_pos_mm = door_pos * PDF_TO_MM;
+        for &d_pos in &door_centers {
+            let door_pos_mm = d_pos * PDF_TO_MM;
             if (pos_mm - door_pos_mm).length() < 1200.0 {
                 near_door = true;
                 break;
@@ -412,7 +529,7 @@ fn generate_obstacles(roomba_start: Vec2) -> Vec<Obstacle> {
         // Don't overlap too close to other obstacles
         let mut overlap = false;
         for obs in &obstacles {
-            if (pos_mm - obs.center).length() < (obs.radius + 300.0) {
+            if (pos_mm - obs.center).length() < (obs.radius + radius + 150.0) {
                 overlap = true;
                 break;
             }
@@ -420,8 +537,13 @@ fn generate_obstacles(roomba_start: Vec2) -> Vec<Obstacle> {
         if overlap {
             continue;
         }
+
+        // Avoid spawning inside or too close to walls and doors
+        let resolved = resolve_pos_collisions_with_map(pos_mm, radius + 100.0, walls, doors);
+        if (resolved - pos_mm).length_squared() > 1.0 {
+            continue;
+        }
         
-        let radius = macroquad::rand::gen_range(160.0, 360.0); // 16 to 36 cm radius
         obstacles.push(Obstacle { center: pos_mm, radius });
     }
     obstacles
@@ -685,14 +807,15 @@ async fn main() {
     let room_labels = map_data::get_room_labels();
 
     let roomba_start_pos = Vec2::new(1520.0 * PDF_TO_MM, 775.0 * PDF_TO_MM);
-    let mut obstacles = generate_obstacles(roomba_start_pos);
+    let mut obstacles = generate_obstacles(roomba_start_pos, &walls, &doors);
+    let mut humans = generate_humans(&room_labels);
+    let mut door_had_human_near = vec![false; doors.len()];
 
     let state = Arc::new(Mutex::new(RobotState::new()));
     start_tcp_server(Arc::clone(&state));
 
     loop {
         let dt = get_frame_time().min(0.05);
-        let total_time = get_time();
 
         // Read speed multiplier once per frame (avoids holding the lock longer than needed)
         let speed_val = state.lock().unwrap().speed;
@@ -703,20 +826,23 @@ async fn main() {
             s.speed = if s.speed > 1.0 { 1.0 } else { 10.0 };
         }
 
-        // 1. Dynamic Doors Timer Cycle (18s: 12s closed, 6s open) — scaled to sim speed
-        let cycle = 18.0;
-        let sim_time = total_time * speed_val as f64;
-        let elapsed_in_cycle = sim_time % cycle;
-        let is_top_doors_open = elapsed_in_cycle >= 12.0;
-        let doors_time_left = if is_top_doors_open {
-            cycle - elapsed_in_cycle
-        } else {
-            12.0 - elapsed_in_cycle
-        };
-
-        for door in &mut doors {
-            if door.is_top_door {
-                door.is_open = is_top_doors_open;
+        // 1. Human-Reactive Door Updates (doors open when a human is near, close immediately with 50% probability when they leave)
+        for (idx, door) in doors.iter_mut().enumerate() {
+            let mut any_human_near = false;
+            for human in &humans {
+                if dist_to_segment(human.pos, door.p1, door.p2) < 1200.0 {
+                    any_human_near = true;
+                    break;
+                }
+            }
+            if any_human_near {
+                door.is_open = true;
+                door_had_human_near[idx] = true;
+            } else if door_had_human_near[idx] {
+                door_had_human_near[idx] = false;
+                if macroquad::rand::gen_range(0.0, 1.0) < 0.5 {
+                    door.is_open = false;
+                }
             }
         }
 
@@ -743,7 +869,9 @@ async fn main() {
             s.stop();
             s.route.clear();
             s.seen_grid.fill(false);
-            obstacles = generate_obstacles(roomba_start_pos);
+            obstacles = generate_obstacles(roomba_start_pos, &walls, &doors);
+            humans = generate_humans(&room_labels);
+            door_had_human_near.fill(false);
         }
 
         {
@@ -753,7 +881,20 @@ async fn main() {
             let mut elapsed = 0.0;
             while elapsed < total_dt {
                 let step = step_size.min(total_dt - elapsed);
-                s.update(step, &walls, &doors, &obstacles);
+                // Update humans
+                for human in &mut humans {
+                    let to_target = human.target - human.pos;
+                    let dist = to_target.length();
+                    if dist < 300.0 {
+                        human.target = pick_random_room_pos(&room_labels);
+                    } else {
+                        let dir = to_target / dist;
+                        let candidate_pos = human.pos + dir * human.speed * step;
+                        human.pos = resolve_pos_collisions_with_map(candidate_pos, HUMAN_RADIUS_MM, &walls, &doors);
+                    }
+                }
+                
+                s.update(step, &walls, &doors, &obstacles, &humans);
                 elapsed += step;
             }
 
@@ -764,7 +905,7 @@ async fn main() {
             for i in 0..8 {
                 let angle_rad = s.heading + (angles[i] as f32).to_radians();
                 let dir = Vec2::new(angle_rad.cos(), angle_rad.sin());
-                lidar_vals[i] = cast_ray(origin, dir, &walls, &doors, &obstacles);
+                lidar_vals[i] = cast_ray(origin, dir, &walls, &doors, &obstacles, &humans);
             }
             s.lidar_distances = lidar_vals;
 
@@ -925,6 +1066,23 @@ async fn main() {
             draw_circle_lines(sx, sy, s_rad, 1.5, Color::from_rgba(255, 120, 40, 220)); // glowing rim
         }
 
+        // Draw Humans
+        for human in &humans {
+            let (hx, hy) = to_screen(human.pos.x, human.pos.y);
+            let h_rad = HUMAN_RADIUS_MM * scale;
+            draw_circle(hx, hy, h_rad, human.color);
+            draw_circle_lines(hx, hy, h_rad, 1.0, Color::from_rgba(255, 255, 255, 180));
+            
+            // Draw a small direction vector
+            let to_target = human.target - human.pos;
+            if to_target.length_squared() > 1.0 {
+                let dir = to_target.normalize();
+                let tip_x = hx + dir.x * h_rad * 1.5;
+                let tip_y = hy - dir.y * h_rad * 1.5; // flipped screen Y
+                draw_line(hx, hy, tip_x, tip_y, 1.5, Color::from_rgba(255, 255, 255, 200));
+            }
+        }
+
 
 
         // Draw Roomba Trail
@@ -947,11 +1105,18 @@ async fn main() {
             draw_circle(sx1, sy1, 2.0, Color::from_rgba(255, 235, 60, 180)); // ray hit point
         }
 
-        // Draw Roomba Body (Turquoise neon)
+        // Draw Roomba Body (Proportional to the room map, Turquoise neon)
         let (sx, sy) = to_screen(rx, ry);
-        let visual_r = 10.0; // Draw slightly larger for visibility
+        let visual_r = ROOMBA_RADIUS_MM * scale; // Proportional size
+        
+        // Draw a pulsing outer ring for high visibility
+        let pulse = (get_time() as f32 * 4.0).sin() * 0.5 + 0.5;
+        let pulse_r = visual_r + 4.0 + pulse * 6.0;
+        let alpha = (120.0 + pulse * 100.0) as u8;
+        draw_circle_lines(sx, sy, pulse_r, 1.0, Color::from_rgba(0, 255, 255, alpha));
+        
         draw_circle(sx, sy, visual_r, Color::from_rgba(0, 210, 255, 200));
-        draw_circle_lines(sx, sy, visual_r, 2.0, Color::from_rgba(0, 255, 255, 255));
+        draw_circle_lines(sx, sy, visual_r, 1.5, Color::from_rgba(0, 255, 255, 255));
 
         // Draw Bumps Glow Indicator
         if b_l {
@@ -961,12 +1126,12 @@ async fn main() {
             draw_circle_lines(sx, sy, visual_r + 3.0, 1.5, Color::from_rgba(255, 60, 80, 255));
         }
 
-        // Draw Heading Arrow
+        // Draw Heading Arrow (extending slightly past the body)
         let hx = heading.cos();
         let hy = heading.sin(); // standard math Y
-        let tip_x = sx + hx * visual_r * 1.5;
-        let tip_y = sy - hy * visual_r * 1.5; // flipped screen Y
-        draw_line(sx, sy, tip_x, tip_y, 2.5, Color::from_rgba(255, 235, 60, 255));
+        let tip_x = sx + hx * visual_r * 2.0;
+        let tip_y = sy - hy * visual_r * 2.0; // flipped screen Y
+        draw_line(sx, sy, tip_x, tip_y, 2.0, Color::from_rgba(255, 235, 60, 255));
 
         // --- RENDER GUI & OVERLAYS ---
 
@@ -980,17 +1145,9 @@ async fn main() {
         draw_text("REFRESH MAP [R]", btn_rect.x + 20.0, btn_rect.y + 25.0, 16.0, WHITE);
 
         // 2. Door Cycle Status
-        let door_status_text = if is_top_doors_open {
-            format!("DOORS OPEN (closing in {:.1}s)", doors_time_left)
-        } else {
-            format!("DOORS LOCKED (opening in {:.1}s)", doors_time_left)
-        };
-        let door_status_color = if is_top_doors_open {
-            Color::from_rgba(40, 220, 100, 255)
-        } else {
-            Color::from_rgba(255, 60, 80, 255)
-        };
-        draw_text(&door_status_text, 250.0, 65.0, 18.0, door_status_color);
+        let door_status_text = "DYNAMIC DOORS: ACTIVE (REACTIVE TO HUMANS)";
+        let door_status_color = Color::from_rgba(0, 255, 255, 255);
+        draw_text(door_status_text, 250.0, 65.0, 18.0, door_status_color);
 
         // Target door proximity indicator
         if let Some(td) = doors.iter().find(|d| d.is_target) {
