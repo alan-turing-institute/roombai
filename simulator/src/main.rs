@@ -75,11 +75,12 @@ const MAX_TURN_ANGLE_DEG: f32 = 30.0; // maximum turn angle per second
 struct Human {
     pos: Vec2,
     target: Vec2,
-    path: Vec<Vec2>,
+    path: VecDeque<Vec2>,
     speed: f32, // mm/s
     color: Color,
     is_enigma: bool,
     heading: f32, // radians, direction of movement
+    dist_since_replan: f32, // mm traveled since last replan; enforces 1m min before replanning
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -639,26 +640,26 @@ fn get_waypoint_for_pos(pos: Vec2) -> Vec2 {
     }
 }
 
-fn plan_path(start: Vec2, end: Vec2) -> Vec<Vec2> {
+fn plan_path(start: Vec2, end: Vec2) -> VecDeque<Vec2> {
     let wp_start = get_waypoint_for_pos(start);
     let wp_end = get_waypoint_for_pos(end);
-    
-    let mut path = Vec::new();
+
+    let mut path = VecDeque::new();
     if wp_start.distance(wp_end) > 10.0 {
-        path.push(wp_start);
-        
+        path.push_back(wp_start);
+
         if (wp_start.y / PDF_TO_MM - 730.0).abs() > 10.0 {
-            path.push(pdf_pt(wp_start.x / PDF_TO_MM, 730.0));
+            path.push_back(pdf_pt(wp_start.x / PDF_TO_MM, 730.0));
         }
-        
+
         if (wp_end.y / PDF_TO_MM - 730.0).abs() > 10.0 {
-            path.push(pdf_pt(wp_end.x / PDF_TO_MM, 730.0));
+            path.push_back(pdf_pt(wp_end.x / PDF_TO_MM, 730.0));
         }
-        
-        path.push(wp_end);
+
+        path.push_back(wp_end);
     }
-    
-    path.push(end);
+
+    path.push_back(end);
     path
 }
 
@@ -689,6 +690,7 @@ fn generate_humans(room_labels: &[RoomLabel], walls: &[Segment], doors: &[Door])
             color: colors[i % colors.len()],
             is_enigma: is_en,
             heading: (target - pos).to_angle(), // initial heading towards target
+            dist_since_replan: 0.0,
         });
     }
 
@@ -737,6 +739,7 @@ fn generate_humans(room_labels: &[RoomLabel], walls: &[Segment], doors: &[Door])
             color: colors[i_h % colors.len()],
             is_enigma: is_en,
             heading: (target - pos).to_angle(), // initial heading towards target
+            dist_since_replan: 0.0,
         });
     }
 
@@ -1159,6 +1162,9 @@ async fn main() {
     state.lock().unwrap().speed = cli_speed;
     start_tcp_server(Arc::clone(&state));
 
+    let mut succeeded = false;
+    let mut roomba_door_side: Option<f32> = None;
+
     loop {
         let dt = get_frame_time().min(0.05);
 
@@ -1167,24 +1173,6 @@ async fn main() {
 
         // Speed toggle: S key switches between 1× and 10×
         // Speed toggle via key disabled; speed set via CLI argument only
-for (idx, door) in doors.iter_mut().enumerate() {
-            let mut any_human_near = false;
-            for human in &humans {
-                if dist_to_segment(human.pos, door.p1, door.p2) < 1200.0 {
-                    any_human_near = true;
-                    break;
-                }
-            }
-            if any_human_near {
-                door.is_open = true;
-                door_had_human_near[idx] = true;
-            } else if door_had_human_near[idx] {
-                door_had_human_near[idx] = false;
-                if macroquad::rand::gen_range(0.0, 1.0) < 0.5 {
-                    door.is_open = false;
-                }
-            }
-        }
 
         // Sync target door state into RobotState for TCP access
         if let Some(td) = doors.iter().find(|d| d.is_target) {
@@ -1195,13 +1183,33 @@ for (idx, door) in doors.iter_mut().enumerate() {
             s.target_door_open = td_open;
         }
 
+        // Check if Roomba has crossed the target door line
+        if !succeeded {
+            if let Some(td) = doors.iter().find(|d| d.is_target) {
+                let mid = (td.p1 + td.p2) * 0.5;
+                let door_vec = td.p2 - td.p1;
+                let normal = Vec2::new(-door_vec.y, door_vec.x).normalize();
+                let s = state.lock().unwrap();
+                let rpos = Vec2::new(s.x, s.y);
+                let side = (rpos - mid).dot(normal);
+                if let Some(prev) = roomba_door_side {
+                    if td.is_open && prev * side < 0.0 {
+                        succeeded = true;
+                    }
+                }
+                roomba_door_side = Some(side);
+            }
+        }
+
         // 2. Refresh Button and Obstacle Generation Interaction
         let mouse_pos = mouse_position();
         let btn_rect = Rect::new(40.0, 40.0, 180.0, 40.0);
         let btn_hover = btn_rect.contains(Vec2::new(mouse_pos.0, mouse_pos.1));
         let btn_clicked = btn_hover && is_mouse_button_pressed(MouseButton::Left);
 
-        if btn_clicked || is_key_pressed(KeyCode::R) {
+        if btn_clicked || (is_key_pressed(KeyCode::R) && !succeeded) {
+            succeeded = false;
+            roomba_door_side = None;
             let mut s = state.lock().unwrap();
             s.x = roomba_start_pos.x;
             s.y = roomba_start_pos.y;
@@ -1215,70 +1223,96 @@ for (idx, door) in doors.iter_mut().enumerate() {
             print_diagnostics(&obstacles, &humans);
         }
 
-        {
+        if !succeeded {
             let mut s = state.lock().unwrap();
             let total_dt = dt * speed_val;
-            let step_size = 0.005_f32; // 5ms steps for extremely high precision
+            let step_size = 0.005_f32; // 5ms steps for Roomba precision
+            // Update humans every human_skip robot substeps (reduces cost at high speed)
+            let human_skip = ((speed_val / 5.0) as usize).max(1);
+            let human_step = step_size * human_skip as f32; // effective dt per human update
             let mut elapsed = 0.0;
+            let mut substep_idx: usize = 0;
             while elapsed < total_dt {
                 let step = step_size.min(total_dt - elapsed);
-                // Update humans
-                for human in &mut humans {
-                    if human.path.is_empty() {
-                        let (new_target, is_en) = pick_human_target(human.is_enigma, &room_labels);
-                        human.target = new_target;
-                        human.is_enigma = is_en;
-                        human.path = plan_path(human.pos, new_target);
+
+                // Update humans and doors every human_skip substeps
+                if substep_idx % human_skip == 0 {
+                    // Open/close doors based on human proximity (inside substep loop so doors
+                    // open before humans collide with them in the same human-update cycle)
+                    for (idx, door) in doors.iter_mut().enumerate() {
+                        let any_near = humans.iter().any(|h| dist_to_segment(h.pos, door.p1, door.p2) < 1200.0);
+                        if any_near {
+                            door.is_open = true;
+                            door_had_human_near[idx] = true;
+                        } else if door_had_human_near[idx] {
+                            door_had_human_near[idx] = false;
+                            if macroquad::rand::gen_range(0.0, 1.0) < 0.5 {
+                                door.is_open = false;
+                            }
+                        }
                     }
-                    
-                    let next_wp = human.path[0];
-                    let to_wp = next_wp - human.pos;
-                    let dist = to_wp.length();
-                    if dist < 300.0 {
-                        human.path.remove(0);
-                    } else {
-                        let desired_dir = to_wp / dist;
-                        // Compute angle between current heading and desired direction
-                        let current_dir = Vec2::new(human.heading.cos(), human.heading.sin());
-                        let dot = current_dir.dot(desired_dir);
-                        let angle = dot.acos(); // angle in radians
-                        let max_angle = MAX_TURN_ANGLE_DEG.to_radians() * step; // limit per tick
-                        let new_dir = if angle > max_angle {
-                            // Rotate current_dir towards desired_dir by max_angle
-                            let cross = current_dir.x * desired_dir.y - current_dir.y * desired_dir.x;
-                            let sign = if cross >= 0.0 { 1.0 } else { -1.0 };
-                            let sin_theta = sign * max_angle.sin();
-                            let cos_theta = max_angle.cos();
-                            Vec2::new(
-                                current_dir.x * cos_theta - current_dir.y * sin_theta,
-                                current_dir.x * sin_theta + current_dir.y * cos_theta,
-                            )
-                        } else {
-                            desired_dir
-                        };
-                        // Update heading
-                        human.heading = new_dir.to_angle();
-                        let candidate_pos = human.pos + new_dir * (human.speed * s.speed as f32) * step;
-                        let resolved_pos = resolve_pos_collisions_with_map(candidate_pos, HUMAN_RADIUS_MM, &walls, &doors);
-                        if !is_inside_building_bounds(resolved_pos) {
-                            // Blocked or going out of bounds, choose a new target and replan
+
+                    for human in &mut humans {
+                        if human.path.is_empty() {
                             let (new_target, is_en) = pick_human_target(human.is_enigma, &room_labels);
                             human.target = new_target;
                             human.is_enigma = is_en;
                             human.path = plan_path(human.pos, new_target);
-                        } else if (resolved_pos - human.pos).length() < 10.0 * step {
-                            // Blocked or stuck, choose a new target and replan
-                            let (new_target, is_en) = pick_human_target(human.is_enigma, &room_labels);
-                            human.target = new_target;
-                            human.is_enigma = is_en;
-                            human.path = plan_path(human.pos, new_target);
+                            human.dist_since_replan = 0.0;
+                        }
+
+                        let next_wp = *human.path.front().unwrap();
+                        let to_wp = next_wp - human.pos;
+                        let dist = to_wp.length();
+                        if dist < 300.0 {
+                            human.path.pop_front();
                         } else {
-                            human.pos = resolved_pos;
+                            let desired_dir = to_wp / dist;
+                            let current_dir = Vec2::new(human.heading.cos(), human.heading.sin());
+                            let dot = current_dir.dot(desired_dir).clamp(-1.0, 1.0);
+                            let angle = dot.acos();
+                            let max_angle = MAX_TURN_ANGLE_DEG.to_radians() * human_step;
+                            let new_dir = if angle > max_angle {
+                                let cross = current_dir.x * desired_dir.y - current_dir.y * desired_dir.x;
+                                let sign = if cross >= 0.0 { 1.0 } else { -1.0 };
+                                let sin_theta = sign * max_angle.sin();
+                                let cos_theta = max_angle.cos();
+                                Vec2::new(
+                                    current_dir.x * cos_theta - current_dir.y * sin_theta,
+                                    current_dir.x * sin_theta + current_dir.y * cos_theta,
+                                )
+                            } else {
+                                desired_dir
+                            };
+                            human.heading = new_dir.to_angle();
+                            // Use human_step (not step) so each human update covers the right distance.
+                            // Speed multiplier is already embedded in total_dt; do not apply s.speed here.
+                            let candidate_pos = human.pos + new_dir * human.speed * human_step;
+                            let resolved_pos = resolve_pos_collisions_with_map(candidate_pos, HUMAN_RADIUS_MM, &walls, &doors);
+                            if !is_inside_building_bounds(resolved_pos) {
+                                let (new_target, is_en) = pick_human_target(human.is_enigma, &room_labels);
+                                human.target = new_target;
+                                human.is_enigma = is_en;
+                                human.path = plan_path(human.pos, new_target);
+                                human.dist_since_replan = 0.0;
+                            } else if (resolved_pos - human.pos).length() < 10.0 * human_step
+                                && human.dist_since_replan > 1000.0 {
+                                // Only replan when stuck AND has already moved at least 1 m
+                                let (new_target, is_en) = pick_human_target(human.is_enigma, &room_labels);
+                                human.target = new_target;
+                                human.is_enigma = is_en;
+                                human.path = plan_path(human.pos, new_target);
+                                human.dist_since_replan = 0.0;
+                            } else {
+                                human.dist_since_replan += (resolved_pos - human.pos).length();
+                                human.pos = resolved_pos;
+                            }
                         }
                     }
                 }
-                
+
                 s.update(step, &walls, &doors, &obstacles, &humans);
+                substep_idx += 1;
                 elapsed += step;
             }
 
@@ -1596,6 +1630,36 @@ for (idx, door) in doors.iter_mut().enumerate() {
             14.0,
             Color::from_rgba(140, 150, 175, 200),
         );
+
+        // Success overlay (drawn last, on top of everything)
+        if succeeded {
+            draw_rectangle(0.0, 0.0, WIN_W, WIN_H, Color::from_rgba(0, 0, 0, 160));
+            draw_text("SUCCESS!", WIN_W / 2.0 - 140.0, WIN_H / 2.0 - 20.0, 80.0, GREEN);
+            let reset_rect = Rect::new(WIN_W / 2.0 - 90.0, WIN_H / 2.0 + 40.0, 180.0, 44.0);
+            let reset_hover = reset_rect.contains(Vec2::new(mouse_pos.0, mouse_pos.1));
+            let reset_color = if reset_hover {
+                Color::from_rgba(0, 229, 255, 255)
+            } else {
+                Color::from_rgba(0, 150, 200, 220)
+            };
+            draw_rectangle(reset_rect.x, reset_rect.y, reset_rect.w, reset_rect.h, reset_color);
+            draw_text("RESET", reset_rect.x + 55.0, reset_rect.y + 28.0, 18.0, WHITE);
+            if (is_mouse_button_pressed(MouseButton::Left) && reset_hover) || is_key_pressed(KeyCode::R) {
+                succeeded = false;
+                roomba_door_side = None;
+                let mut s = state.lock().unwrap();
+                s.x = roomba_start_pos.x;
+                s.y = roomba_start_pos.y;
+                s.heading = 0.0;
+                s.stop();
+                s.route.clear();
+                s.seen_grid.fill(false);
+                obstacles = generate_obstacles(roomba_start_pos, &walls, &doors, &room_labels);
+                humans = generate_humans(&room_labels, &walls, &doors);
+                door_had_human_near.fill(false);
+                print_diagnostics(&obstacles, &humans);
+            }
+        }
 
         next_frame().await;
     }
