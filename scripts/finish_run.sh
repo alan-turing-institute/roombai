@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
 # finish_run.sh — stitch timelapse and write metadata at the end of an attempt.
 #
-# Usage:
-#   ./finish_run.sh <outcome>
-#   ./finish_run.sh escaped
-#   ./finish_run.sh dnf
+# Usage (called by Claude at end of run):
+#   ./scripts/finish_run.sh escaped   # or: ./scripts/finish_run.sh dnf
 #
-# Expects these env vars (set by init_run.sh):
-#   ATTEMPT_DIR, PILOT_NAME, COMMIT_HASH, START_TIME, TOOL_CALLS, DECISIONS
+# Reads all state from /tmp/run_state.env.
 
 set -euo pipefail
 
 OUTCOME="${1:-dnf}"
+STATE_FILE="/tmp/run_state.env"
 
-if [ -z "${ATTEMPT_DIR:-}" ]; then
-    echo "Error: ATTEMPT_DIR not set. Did you source init_run.sh?"
+if [ ! -f "$STATE_FILE" ]; then
+    echo "Error: state file not found at ${STATE_FILE}. Was init_run.sh run?"
     exit 1
 fi
+
+# Load state
+source "$STATE_FILE"
 
 DURATION_S=$(( $(date +%s) - START_TIME ))
 

@@ -40,18 +40,23 @@ Use `rpicam-still` to capture frames. The camera is mounted **upside down** — 
 
 ## Run recording
 
-At the start of the run:
-```bash
-source ./scripts/init_run.sh
-```
+The run directory and state are already initialised by `run.sh` before Claude starts.
+State is stored in `/tmp/run_state.env` and shared across all scripts.
 
-At every decision point (captures a timestamped frame and increments `FRAME_IDX`):
+At every decision point (captures a timestamped frame):
 ```bash
 source ./scripts/capture_frame.sh
-DECISIONS=$(( DECISIONS + 1 ))
 ```
 
-Increment `TOOL_CALLS` by 1 each time a `pilot send` command is issued.
+After each `pilot send` command, increment the tool call counter:
+```bash
+sed -i "s/^TOOL_CALLS=.*/TOOL_CALLS=$(( $(grep TOOL_CALLS /tmp/run_state.env | cut -d= -f2) + 1 ))/" /tmp/run_state.env
+```
+
+After each frame analysis, increment the decision counter:
+```bash
+sed -i "s/^DECISIONS=.*/DECISIONS=$(( $(grep DECISIONS /tmp/run_state.env | cut -d= -f2) + 1 ))/" /tmp/run_state.env
+```
 
 At the end of the run:
 ```bash

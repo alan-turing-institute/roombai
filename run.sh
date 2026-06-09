@@ -58,15 +58,20 @@ for i in $(seq 1 15); do
     fi
 done
 
-# ── Step 5: launch Claude ────────────────────────────────────────────────────
+# ── Step 5: initialise run directory ────────────────────────────────────────
 echo ""
-echo "━━━ Step 5/6 — Launching Claude ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "━━━ Step 5/6 — Initialising run ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 cd "${REPO_ROOT}"
+bash "${REPO_ROOT}/scripts/init_run.sh"
+
+# ── Step 6: launch Claude ────────────────────────────────────────────────────
+echo ""
+echo "━━━ Step 6/7 — Launching Claude ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 claude "/escape"
 
 # ── Step 6: upload run artifacts to Azure Blob ───────────────────────────────
 echo ""
-echo "━━━ Step 6/6 — Uploading run to Azure Blob Storage ━━━━━━━━━━━━━━━━━━━━━"
+echo "━━━ Step 7/7 — Uploading run to Azure Blob Storage ━━━━━━━━━━━━━━━━━━━━━"
 LATEST_ATTEMPT=$(ls -dt /tmp/escape_attempt_* 2>/dev/null | head -1 || true)
 if [ -z "$LATEST_ATTEMPT" ]; then
     echo "  No attempt directory found in /tmp — nothing to upload."
