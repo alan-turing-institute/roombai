@@ -42,18 +42,48 @@ pip_install() {
 echo ""
 echo "── install_models: Python tooling ──────────────────────────────────────"
 
-if python3 -c "import hailo_model_zoo" 2>/dev/null; then
-    ok "hailo-model-zoo already installed"
+# -- 1a. numba (hailo-model-zoo dependency that fails to build from source on ARM)
+# Install from the system package manager first (pre-built ARM binary, no LLVM
+# compilation required), then fall back to pip with LLVM dev headers if needed.
+if python3 -c "import numba" 2>/dev/null; then
+    ok "numba already available"
 else
-    info "Installing hailo-model-zoo…"
-    pip_install hailo-model-zoo
-    if python3 -c "import hailo_model_zoo" 2>/dev/null; then
-        ok "hailo-model-zoo installed"
-    else
-        warn "hailo-model-zoo install failed — downloads will rely on ONNX fallback"
-    fi
+    info "Installing numba (ARM pre-built via apt — avoids LLVM build failure)…"
+    sudo apt-get install -y python3-numba 2>/dev/null \
+    && ok "numba installed via apt" \
+    || {
+        # apt failed — try installing LLVM then numba via pip
+        info "apt install failed, trying pip with LLVM headers…"
+        sudo apt-get install -y llvm-dev 2>/dev/null || true
+        pip_install numba
+        python3 -c "import numba" 2>/dev/null \
+            && ok "numba installed via pip" \
+            || warn "numba install failed — hailo-model-zoo may not import correctly"
+    }
 fi
 
+# -- 1b. hailo-model-zoo
+# Use the local repo at ~/hailo-model-zoo if present (avoids PyPI download and
+# ensures the version matches the SDK on this Pi).  Fall back to PyPI otherwise.
+HAILO_ZOO_LOCAL="$HOME/hailo-model-zoo"
+
+if python3 -c "import hailo_model_zoo" 2>/dev/null; then
+    ok "hailo-model-zoo already installed"
+elif [[ -d "$HAILO_ZOO_LOCAL" ]]; then
+    info "Installing hailo-model-zoo from local repo ($HAILO_ZOO_LOCAL)…"
+    pip_install "$HAILO_ZOO_LOCAL"
+    python3 -c "import hailo_model_zoo" 2>/dev/null \
+        && ok "hailo-model-zoo installed from local repo" \
+        || warn "hailo-model-zoo local install failed — downloads will rely on ONNX fallback"
+else
+    info "Installing hailo-model-zoo from PyPI…"
+    pip_install hailo-model-zoo
+    python3 -c "import hailo_model_zoo" 2>/dev/null \
+        && ok "hailo-model-zoo installed from PyPI" \
+        || warn "hailo-model-zoo install failed — downloads will rely on ONNX fallback"
+fi
+
+# -- 1c. ultralytics (ONNX export fallback for HEF compilation)
 if python3 -c "import ultralytics" 2>/dev/null; then
     ok "ultralytics already installed"
 else
