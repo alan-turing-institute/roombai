@@ -76,6 +76,7 @@ struct Human {
     target: Vec2,
     speed: f32, // mm/s
     color: Color,
+    is_enigma: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -440,15 +441,29 @@ fn dist_to_segment(p: Vec2, p1: Vec2, p2: Vec2) -> f32 {
     (p - closest_point).length()
 }
 
-fn pick_random_room_pos(room_labels: &[RoomLabel]) -> Vec2 {
-    if room_labels.is_empty() {
-        return Vec2::new(1520.0 * PDF_TO_MM, 775.0 * PDF_TO_MM);
+fn pick_human_target(is_enigma: bool, room_labels: &[RoomLabel]) -> Vec2 {
+    if is_enigma {
+        // Enigma boundaries in PDF coordinates:
+        // X in [1333.74, 1603.54]
+        // Y in [744.08, 866.63]
+        // Safe inner bounds:
+        let rx = macroquad::rand::gen_range(1350.0, 1580.0);
+        let ry = macroquad::rand::gen_range(755.0, 855.0);
+        Vec2::new(rx * PDF_TO_MM, ry * PDF_TO_MM)
+    } else {
+        let non_enigma_labels: Vec<&RoomLabel> = room_labels
+            .iter()
+            .filter(|rl| !rl.name.contains("ENIGMA"))
+            .collect();
+        if non_enigma_labels.is_empty() {
+            return Vec2::new(1520.0 * PDF_TO_MM, 775.0 * PDF_TO_MM);
+        }
+        let idx = macroquad::rand::rand() as usize % non_enigma_labels.len();
+        non_enigma_labels[idx].pos
     }
-    let idx = macroquad::rand::rand() as usize % room_labels.len();
-    room_labels[idx].pos
 }
 
-fn generate_humans(room_labels: &[RoomLabel]) -> Vec<Human> {
+fn generate_humans(room_labels: &[RoomLabel], walls: &[Segment], doors: &[Door]) -> Vec<Human> {
     let colors = [
         Color::from_rgba(255, 105, 180, 255), // Hot Pink
         Color::from_rgba(218, 112, 214, 255), // Orchid
@@ -457,67 +472,81 @@ fn generate_humans(room_labels: &[RoomLabel]) -> Vec<Human> {
         Color::from_rgba(138, 43, 226, 255),  // Blue Violet
     ];
     let mut humans = Vec::new();
-    for i in 0..5 {
-        let pos = pick_random_room_pos(room_labels);
-        let target = pick_random_room_pos(room_labels);
+
+    // Spawn 3 Enigma humans
+    for i in 0..3 {
+        let rx = macroquad::rand::gen_range(1350.0, 1580.0);
+        let ry = macroquad::rand::gen_range(755.0, 855.0);
+        let mut pos = Vec2::new(rx * PDF_TO_MM, ry * PDF_TO_MM);
+        pos = resolve_pos_collisions_with_map(pos, HUMAN_RADIUS_MM, walls, doors);
+        let target = pick_human_target(true, room_labels);
         let speed = macroquad::rand::gen_range(120.0, 180.0);
         humans.push(Human {
             pos,
             target,
             speed,
-            color: colors[i % colors.len()],
+            color: colors[i],
+            is_enigma: true,
         });
     }
+
+    // Spawn 2 Non-Enigma humans
+    let non_enigma_labels: Vec<&RoomLabel> = room_labels
+        .iter()
+        .filter(|rl| !rl.name.contains("ENIGMA"))
+        .collect();
+
+    for i in 0..2 {
+        let label_pos = if !non_enigma_labels.is_empty() {
+            let idx = macroquad::rand::rand() as usize % non_enigma_labels.len();
+            non_enigma_labels[idx].pos
+        } else {
+            Vec2::new(1520.0 * PDF_TO_MM, 775.0 * PDF_TO_MM)
+        };
+        let mut pos = label_pos;
+        pos = resolve_pos_collisions_with_map(pos, HUMAN_RADIUS_MM, walls, doors);
+        let target = pick_human_target(false, room_labels);
+        let speed = macroquad::rand::gen_range(120.0, 180.0);
+        humans.push(Human {
+            pos,
+            target,
+            speed,
+            color: colors[3 + i],
+            is_enigma: false,
+        });
+    }
+
     humans
 }
 
 // Generate random obstacles avoiding start area, doors, and walls
-fn generate_obstacles(roomba_start: Vec2, walls: &[Segment], doors: &[Door]) -> Vec<Obstacle> {
+fn generate_obstacles(
+    roomba_start: Vec2,
+    walls: &[Segment],
+    doors: &[Door],
+    room_labels: &[RoomLabel],
+) -> Vec<Obstacle> {
     let mut obstacles: Vec<Obstacle> = Vec::new();
-    let spawn_zones = [
-        // Top rooms (except Enigma)
-        (100.0, 1150.0, 820.0, 980.0),
-        // Corridor
-        (50.0, 1550.0, 730.0, 770.0),
-        // Lower rooms
-        (50.0, 1550.0, 300.0, 670.0),
-    ];
-    
-    // Core door locations to keep clear (in PDF units)
-    let door_centers = [
-        Vec2::new(32.5, 800.0),
-        Vec2::new(282.5, 800.0),
-        Vec2::new(582.5, 800.0),
-        Vec2::new(782.5, 800.0),
-        Vec2::new(1032.5, 800.0),
-        Vec2::new(1232.5, 800.0),
-        Vec2::new(225.0, 700.0),
-        Vec2::new(725.0, 700.0),
-        Vec2::new(1375.0, 700.0),
-    ];
-    
-    let mut attempts = 0;
-    while obstacles.len() < 18 && attempts < 800 {
-        attempts += 1;
-        let zone_idx = macroquad::rand::rand() as usize % spawn_zones.len();
-        let (x_min, x_max, y_min, y_max) = spawn_zones[zone_idx];
-        
-        let rx = x_min + macroquad::rand::gen_range(0.0, x_max - x_min);
-        let ry = y_min + macroquad::rand::gen_range(0.0, y_max - y_min);
+
+    // 1. Generate 9 obstacles inside Enigma
+    let mut enigma_attempts = 0;
+    while obstacles.len() < 9 && enigma_attempts < 1000 {
+        enigma_attempts += 1;
+        let rx = macroquad::rand::gen_range(1350.0, 1580.0);
+        let ry = macroquad::rand::gen_range(755.0, 855.0);
         let pos_mm = Vec2::new(rx * PDF_TO_MM, ry * PDF_TO_MM);
-        
-        let radius = macroquad::rand::gen_range(180.0, 250.0); // 18 to 25 cm radius (scale of chairs)
+        let radius = macroquad::rand::gen_range(180.0, 250.0);
 
         // Don't spawn on top of starting position
         if (pos_mm - roomba_start).length() < 1600.0 {
             continue;
         }
-        
+
         // Don't spawn blocking doorways
         let mut near_door = false;
-        for &d_pos in &door_centers {
-            let door_pos_mm = d_pos * PDF_TO_MM;
-            if (pos_mm - door_pos_mm).length() < 1200.0 {
+        for door in doors {
+            let door_mid = (door.p1 + door.p2) * 0.5;
+            if (pos_mm - door_mid).length() < 1200.0 {
                 near_door = true;
                 break;
             }
@@ -525,7 +554,7 @@ fn generate_obstacles(roomba_start: Vec2, walls: &[Segment], doors: &[Door]) -> 
         if near_door {
             continue;
         }
-        
+
         // Don't overlap too close to other obstacles
         let mut overlap = false;
         for obs in &obstacles {
@@ -543,9 +572,65 @@ fn generate_obstacles(roomba_start: Vec2, walls: &[Segment], doors: &[Door]) -> 
         if (resolved - pos_mm).length_squared() > 1.0 {
             continue;
         }
-        
+
         obstacles.push(Obstacle { center: pos_mm, radius });
     }
+
+    // 2. Generate 9 obstacles inside the other rooms (non-Enigma, non-corridor)
+    let non_enigma_non_corr_labels: Vec<&RoomLabel> = room_labels
+        .iter()
+        .filter(|rl| !rl.name.contains("ENIGMA") && !rl.name.contains("CORRIDOR"))
+        .collect();
+
+    let mut other_attempts = 0;
+    while obstacles.len() < 18 && other_attempts < 2000 {
+        other_attempts += 1;
+        if non_enigma_non_corr_labels.is_empty() {
+            break;
+        }
+        let idx = macroquad::rand::rand() as usize % non_enigma_non_corr_labels.len();
+        let label_pos = non_enigma_non_corr_labels[idx].pos;
+
+        let angle = macroquad::rand::gen_range(0.0, 2.0 * std::f32::consts::PI);
+        let dist = macroquad::rand::gen_range(0.0, 2000.0);
+        let offset = Vec2::new(angle.cos() * dist, angle.sin() * dist);
+        let pos_mm = label_pos + offset;
+        let radius = macroquad::rand::gen_range(180.0, 250.0);
+
+        // Don't spawn blocking doorways
+        let mut near_door = false;
+        for door in doors {
+            let door_mid = (door.p1 + door.p2) * 0.5;
+            if (pos_mm - door_mid).length() < 1200.0 {
+                near_door = true;
+                break;
+            }
+        }
+        if near_door {
+            continue;
+        }
+
+        // Don't overlap too close to other obstacles
+        let mut overlap = false;
+        for obs in &obstacles {
+            if (pos_mm - obs.center).length() < (obs.radius + radius + 150.0) {
+                overlap = true;
+                break;
+            }
+        }
+        if overlap {
+            continue;
+        }
+
+        // Avoid spawning inside or too close to walls and doors
+        let resolved = resolve_pos_collisions_with_map(pos_mm, radius + 100.0, walls, doors);
+        if (resolved - pos_mm).length_squared() > 1.0 {
+            continue;
+        }
+
+        obstacles.push(Obstacle { center: pos_mm, radius });
+    }
+
     obstacles
 }
 
@@ -807,9 +892,21 @@ async fn main() {
     let room_labels = map_data::get_room_labels();
 
     let roomba_start_pos = Vec2::new(1520.0 * PDF_TO_MM, 775.0 * PDF_TO_MM);
-    let mut obstacles = generate_obstacles(roomba_start_pos, &walls, &doors);
-    let mut humans = generate_humans(&room_labels);
+    let mut obstacles = generate_obstacles(roomba_start_pos, &walls, &doors, &room_labels);
+    let mut humans = generate_humans(&room_labels, &walls, &doors);
     let mut door_had_human_near = vec![false; doors.len()];
+
+    let print_diagnostics = |obs: &[Obstacle], hums: &[Human]| {
+        let enigma_obs_count = obs.iter().filter(|o| {
+            let x = o.center.x / PDF_TO_MM;
+            let y = o.center.y / PDF_TO_MM;
+            x >= 1333.74 && x <= 1603.54 && y >= 744.08 && y <= 866.63
+        }).count();
+        let enigma_hums_count = hums.iter().filter(|h| h.is_enigma).count();
+        println!("DIAGNOSTICS: Total obstacles = {}, Enigma obstacles = {}; Total humans = {}, Enigma humans = {}",
+            obs.len(), enigma_obs_count, hums.len(), enigma_hums_count);
+    };
+    print_diagnostics(&obstacles, &humans);
 
     let state = Arc::new(Mutex::new(RobotState::new()));
     start_tcp_server(Arc::clone(&state));
@@ -869,9 +966,10 @@ async fn main() {
             s.stop();
             s.route.clear();
             s.seen_grid.fill(false);
-            obstacles = generate_obstacles(roomba_start_pos, &walls, &doors);
-            humans = generate_humans(&room_labels);
+            obstacles = generate_obstacles(roomba_start_pos, &walls, &doors, &room_labels);
+            humans = generate_humans(&room_labels, &walls, &doors);
             door_had_human_near.fill(false);
+            print_diagnostics(&obstacles, &humans);
         }
 
         {
@@ -886,11 +984,19 @@ async fn main() {
                     let to_target = human.target - human.pos;
                     let dist = to_target.length();
                     if dist < 300.0 {
-                        human.target = pick_random_room_pos(&room_labels);
+                        human.target = pick_human_target(human.is_enigma, &room_labels);
                     } else {
                         let dir = to_target / dist;
                         let candidate_pos = human.pos + dir * human.speed * step;
                         human.pos = resolve_pos_collisions_with_map(candidate_pos, HUMAN_RADIUS_MM, &walls, &doors);
+                        if human.is_enigma {
+                            let min_x = 1335.0 * PDF_TO_MM;
+                            let max_x = 1602.0 * PDF_TO_MM;
+                            let min_y = 746.0 * PDF_TO_MM;
+                            let max_y = 864.0 * PDF_TO_MM;
+                            human.pos.x = human.pos.x.clamp(min_x, max_x);
+                            human.pos.y = human.pos.y.clamp(min_y, max_y);
+                        }
                     }
                 }
                 
@@ -1014,11 +1120,7 @@ async fn main() {
             gy += grid_gap;
         }
 
-        // Draw Room Zones & Labels
-        for label in &room_labels {
-            let (sx, sy) = to_screen(label.pos.x, label.pos.y);
-            draw_text(label.name, sx - 20.0, sy, 13.0, Color::from_rgba(140, 150, 175, 200));
-        }
+
 
         // Draw Static Walls
         for wall in &walls {
