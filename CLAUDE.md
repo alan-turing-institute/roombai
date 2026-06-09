@@ -3,7 +3,8 @@
 ## Goal
 
 You are controlling a Roomba cleaning robot. A camera is mounted on it.
-The task is the escape the room via an open door as fast as possible.
+The task is the escape the room via an open door as fast as possible. 
+Avoid bumping into things.
 
 ---
 
@@ -51,11 +52,16 @@ Default port: `127.0.0.1:9999`. The robot **must be powered on before the daemon
 
 ### Camera
 
-`rpicam-still` and `rpicam-hello` can be used to capture still or video, respectively.
+`rpicam-still` and `rpicam-hello` can be used to capture still or video, respectively. There may be other ways to consume data from the connected camera.
 
 ---
 
 ## Constraints
+
+### Don't read or write to /tmp
+If scratch space is needed, create a tmp directory inside the current directory.
+
+### Do not checkout or view any other branches of this repo
 
 ### No external LLM API
 There is no `ANTHROPIC_API_KEY` available. Do **not** use the `anthropic` SDK
