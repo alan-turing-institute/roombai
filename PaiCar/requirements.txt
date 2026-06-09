@@ -1,0 +1,4 @@
+anthropic>=0.40.0
+requests>=2.31.0
+# picar is installed from the SunFounder_PiCar-V repo:
+#   cd ~/SunFounder_PiCar-V && sudo python3 setup.py install
