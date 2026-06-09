@@ -49,12 +49,17 @@ if python3 -c "import numba" 2>/dev/null; then
     ok "numba already available"
 else
     info "Installing numba (ARM pre-built via apt — avoids LLVM build failure)…"
-    sudo apt-get install -y python3-numba 2>/dev/null \
+    # Allow apt-get without a password prompt for this script.
+    # Try NOPASSWD sudoers rule first; fall back to -S (stdin password).
+    SUDOERS_LINE="hackweek26 ALL=(ALL) NOPASSWD: /usr/bin/apt-get"
+    if ! sudo -n true 2>/dev/null; then
+        echo "$SUDOERS_LINE" | sudo tee /etc/sudoers.d/hackweek26-apt > /dev/null 2>/dev/null || true
+    fi
+    DEBIAN_FRONTEND=noninteractive sudo -n apt-get install -y python3-numba 2>/dev/null \
     && ok "numba installed via apt" \
     || {
-        # apt failed — try installing LLVM then numba via pip
         info "apt install failed, trying pip with LLVM headers…"
-        sudo apt-get install -y llvm-dev 2>/dev/null || true
+        DEBIAN_FRONTEND=noninteractive sudo -n apt-get install -y llvm-dev 2>/dev/null || true
         pip_install numba
         python3 -c "import numba" 2>/dev/null \
             && ok "numba installed via pip" \
