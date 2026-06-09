@@ -84,6 +84,10 @@ obstacles encountered, waiting states, and arrival confirmation.
 
 When asked to escape the room, act as **Orchestrator** and run a subagent team via the `Agent` tool in a loop until the robot escapes or you determine human input is needed.
 
+### Blank-slate rule — DO NOT use memory for room layout
+
+**Never** read or act on project memory files (`MEMORY.md`, `project_door_facts.md`, or any memory referencing prior room observations) when planning or executing an escape attempt. Each attempt must treat the room as completely unknown. Memory-derived assumptions about door location, fixtures, or room layout have caused multiple failed attempts by producing brittle strategies tuned to specific remembered features (e.g. a green card reader) rather than general navigation.
+
 **Researcher** — given a question, searches the web for relevant algorithms, open-source libraries, APIs, or techniques and returns a concise findings summary. Called by the Strategist before committing to a plan — never called during active robot motion.
 
 **Strategist** — reads any attempt review files, calls Researcher as needed to inform its approach, then proposes the *simplest viable strategy not yet tried*, with explicit success criteria and abort conditions.
