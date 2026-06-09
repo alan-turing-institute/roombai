@@ -161,11 +161,27 @@ def _load_model(name: str) -> bool:
         ng    = ngs[0]
         in_p  = InputVStreamParams.make(ng, format_type=FormatType.UINT8)
         out_p = OutputVStreamParams.make(ng, format_type=FormatType.FLOAT32)
+
+        # Resolve the input stream name once at load time so _hailo_infer never
+        # calls get_input_vstream_infos() on the InferVStreams pipe — that method
+        # was removed in some SDK versions (the ng object always has it).
+        try:
+            in_name = ng.get_input_vstream_infos()[0].name
+        except Exception:
+            # Older SDK: name may be accessible directly from in_p
+            if isinstance(in_p, dict):
+                in_name = next(iter(in_p))
+            elif isinstance(in_p, list):
+                in_name = in_p[0].name
+            else:
+                in_name = getattr(in_p, "name", None)
+
         _hailo_reg[name] = {
             "ng":       ng,
             "params":   ng.create_params(),
             "in_p":     in_p,
             "out_p":    out_p,
+            "in_name":  in_name,
             "input_wh": spec["input_wh"],
             "kind":     spec["kind"],
             "dataset":  spec.get("dataset", ""),
@@ -206,8 +222,7 @@ def _hailo_infer(name: str, img_bgr: np.ndarray) -> dict[str, np.ndarray] | None
         inp     = np.expand_dims(rgb, 0).astype(np.uint8)
         with m["ng"].activate(m["params"]):
             with InferVStreams(m["ng"], m["in_p"], m["out_p"]) as pipe:
-                in_name = pipe.get_input_vstream_infos()[0].name
-                with pipe.async_infer({in_name: inp}) as job:
+                with pipe.async_infer({m["in_name"]: inp}) as job:
                     return job.get()
     except Exception as e:
         print(f"[vision] {name} infer error: {e}")
