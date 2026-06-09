@@ -1,6 +1,10 @@
 # Pi SSH target — fill in your Pi's address, do not commit
 .pi_host
 
+# Run data saved from the Pi after each run — kept locally only
+runs/*
+!runs/.gitkeep
+
 # Runtime artefacts
 __pycache__/
 *.pyc

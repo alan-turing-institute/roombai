@@ -109,19 +109,45 @@ The `-t` flag allocates a pseudo-TTY so Ctrl-C propagates correctly.
   d. **explore.py** — runs the main exploration loop, which also calls
      `ensure_models()` internally (instant because models are already resolved).
 
-### 7. Stream the run log
+### 7. Save run data to this machine
 
-After run.sh exits or is interrupted, offer to show the last 50 lines of
-`/tmp/roomba_log.txt`:
+After run.sh exits or is interrupted, download all run data from the Pi
+into a timestamped subfolder of `runs/` in the project root.
 
+Determine the timestamp:
 ```
-ssh <pi_host> "tail -50 /tmp/roomba_log.txt"
+TIMESTAMP=$(date +%Y-%m-%d_%H-%M)
+RUN_DIR="runs/$TIMESTAMP"
+mkdir -p "$RUN_DIR/frames"
 ```
 
-Also offer to fetch the saved map:
+Download each item using sshpass (password is `aipi`):
 ```
-ssh <pi_host> "ls -lh /tmp/roomba_map_*.png 2>/dev/null | tail -5"
+sshpass -p aipi rsync -az --ignore-missing-args \
+    <pi_host>:/tmp/roomba_log.txt \
+    <pi_host>:/tmp/roomba_state.json \
+    <pi_host>:/tmp/roomba_current.jpg \
+    <pi_host>:/tmp/pilot.log \
+    <pi_host>:/tmp/speak_queue.txt \
+    "$RUN_DIR/"
+
+sshpass -p aipi rsync -az --ignore-missing-args \
+    <pi_host>:/tmp/roomba_frames/ \
+    "$RUN_DIR/frames/"
+
+sshpass -p aipi rsync -az --ignore-missing-args \
+    <pi_host>:/tmp/roomba_map*.png \
+    <pi_host>:/tmp/roomba_map*.json \
+    "$RUN_DIR/"
 ```
+
+Then print a summary of what was saved:
+```
+echo "Run data saved to $RUN_DIR"
+ls -lh "$RUN_DIR/"
+```
+
+The `runs/` folder is in .gitignore so none of this is committed.
 
 ### Error handling
 
