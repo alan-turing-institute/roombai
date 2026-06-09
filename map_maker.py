@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Optional
 
 EVENTS_FILE = Path("/tmp/roomba_events.json")
-MAP_DIR     = Path(__file__).parent / "roommap"
+MAP_DIR     = Path("/tmp/roomba_maps")
 
 # How close (cm) two events of the same label must be before we discard the
 # duplicate.  Keeps the map readable without losing meaningful spread.
@@ -120,6 +120,52 @@ class MapRecorder:
                 ]
             if not self._near(label, wx, wy, DOOR_DEDUP_CM):
                 self._events.append(MapEvent(wx, wy, label, "camera"))
+
+    # ── Navigation query ─────────────────────────────────────────────────────
+
+    # Labels that are openings to drive through — don't treat as obstacles.
+    NAVIGABLE = {"door (open)"}
+
+    def obstacles_ahead(
+        self,
+        robot_x: float,
+        robot_y: float,
+        heading: float,
+        look_dist_cm: float = 180.0,
+        width_cm: float = 55.0,
+    ) -> list[tuple["MapEvent", float, float]]:
+        """
+        Return map events that lie within a rectangular cone directly ahead
+        of the robot.
+
+        The cone extends `look_dist_cm` forward and `width_cm / 2` to each
+        side of the robot's heading.  Open doors are excluded; everything else
+        (bumps, YOLO objects, closed doors) is treated as a potential obstacle.
+
+        Note: positions are dead-reckoning estimates and accumulate drift, so
+        the cone is intentionally wide and the caller should treat results as
+        advisory rather than exact.
+
+        Returns list of (event, forward_dist_cm, lateral_offset_cm) tuples
+        sorted nearest-first.
+        """
+        h_rad = math.radians(heading)
+        fwd   = (math.cos(h_rad), math.sin(h_rad))       # unit vector forward
+        lat   = (-math.sin(h_rad), math.cos(h_rad))       # unit vector left
+
+        results: list[tuple[MapEvent, float, float]] = []
+        with self._lock:
+            for ev in self._events:
+                if ev.label in self.NAVIGABLE:
+                    continue
+                dx, dy    = ev.world_x - robot_x, ev.world_y - robot_y
+                fwd_dist  = dx * fwd[0] + dy * fwd[1]    # positive = ahead
+                lat_offset = abs(dx * lat[0] + dy * lat[1])
+                if 0 < fwd_dist < look_dist_cm and lat_offset < width_cm / 2:
+                    results.append((ev, fwd_dist, lat_offset))
+
+        results.sort(key=lambda t: t[1])
+        return results
 
     # ── Persistence ───────────────────────────────────────────────────────────
 

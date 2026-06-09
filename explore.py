@@ -67,11 +67,14 @@ SCAN_ROCK_CM    = 20    # forward distance (cm) rocked at each scan heading for 
 DOOR_CONFIRM_FRAMES = 3
 DOOR_CONFIRM_MIN_CONF = 0.10   # ignore detections below this confidence
 SCAN_EVERY_BUMPS = 6           # pause for a 360° scan every N bumps
+MAP_SAVE_INTERVAL = 30         # seconds between periodic map saves
 APPROACH_SLOW_DIST  = 150  # cm — half-speed below this
 APPROACH_STOP_DIST  = 40   # cm — stop and declare arrival
 
 # Proactive avoidance: steer if an obstacle is detected closer than this
 AVOID_STEER_DIST_CM = 120  # cm
+# Map-based avoidance: steer if a known map obstacle is closer than this
+MAP_AVOID_DIST_CM   = 150  # cm  (generous — odometry drifts so cone is wide)
 
 # ── Shared state ────────────────────────────────────────────────────────────
 _lock = threading.Lock()
@@ -518,30 +521,50 @@ def mover_thread():
             # After do_reverse_safe: position ≈ X, heading H
             # Frame D was captured during the return forward leg (flow C→D, heading H+180°)
 
-    def choose_avoid_turn() -> float:
+    def choose_avoid_turn(map_obs: list | None = None) -> float:
         """
-        Steering direction: fuse YOLO blocked map with MiDaS open-space fractions.
+        Steering direction: fuse three signals (highest priority first):
+          1. Historical map — known obstacle positions from previous collisions
+             and camera detections (map_obs list, nearest obstacle first).
+          2. Real-time YOLO blocked map — current camera frame obstacle thirds.
+          3. MiDaS open-space fractions — depth-map open-space estimate.
         Returns degrees to turn (+CCW, −CW).
         """
-        blocked     = state_get("blocked") or {}
-        clear_path  = state_get("clear_path")
-        open_space  = state_get("open_space") or {}
+        blocked    = state_get("blocked") or {}
+        clear_path = state_get("clear_path")
+        open_space = state_get("open_space") or {}
 
-        # If YOLO says a path is clear, use it
+        # ── 1. Historical map: steer away from the nearest known obstacle ────
+        if map_obs:
+            nearest_ev, fwd_dist, lat_offset = map_obs[0]
+            # Determine which side the obstacle is on relative to heading
+            h_rad  = math.radians(odom.heading)
+            lat_vec = (-math.sin(h_rad), math.cos(h_rad))   # left unit vector
+            dx = nearest_ev.world_x - odom.x
+            dy = nearest_ev.world_y - odom.y
+            lat_signed = dx * lat_vec[0] + dy * lat_vec[1]  # + = obstacle left
+            steer = -40.0 if lat_signed > 0 else 40.0       # turn away from it
+            log(
+                f"[MAP-AVOID] '{nearest_ev.label}' at {fwd_dist:.0f}cm "
+                f"({'left' if lat_signed > 0 else 'right'}) → turning {steer:+.0f}°"
+            )
+            return steer
+
+        # ── 2. Real-time YOLO ────────────────────────────────────────────────
         if clear_path == "right" and not blocked.get("right"):
             return -40.0
         if clear_path == "left" and not blocked.get("left"):
             return 40.0
 
-        # Fall back to depth-map open-space fractions
-        ol = open_space.get("left", 0.0)
+        # ── 3. MiDaS open-space fractions ───────────────────────────────────
+        ol  = open_space.get("left",  0.0)
         or_ = open_space.get("right", 0.0)
         if ol > or_ + 0.05:
-            return 40.0    # left is more open
+            return 40.0
         if or_ > ol + 0.05:
-            return -40.0   # right is more open
+            return -40.0
 
-        # No clear preference — turn 90° CW (wall-following default)
+        # No clear preference — turn 90° CW (consistent wall-following)
         return -90.0
 
     speak("Beginning room exploration.")
@@ -606,16 +629,24 @@ def mover_thread():
                 speed = MOVE_SPEED
                 burst = MOVE_BURST
 
-            # Proactive avoidance: if center is blocked on approach, steer around
+            # Proactive avoidance: check map then live camera
             blocked    = state_get("blocked") or {}
             nearest_cm = state_get("nearest_cm")
-            if blocked.get("center") and nearest_cm and nearest_cm < AVOID_STEER_DIST_CM:
+            map_obs    = map_recorder.obstacles_ahead(
+                odom.x, odom.y, odom.heading,
+                look_dist_cm=MAP_AVOID_DIST_CM,
+            )
+            if map_obs:
+                ev, map_fwd, _ = map_obs[0]
+                log(f"[MAP] APPROACH: known '{ev.label}' at {map_fwd:.0f}cm → steering")
+                do_turn(choose_avoid_turn(map_obs))
+            elif blocked.get("center") and nearest_cm and nearest_cm < AVOID_STEER_DIST_CM:
                 deg = choose_avoid_turn()
                 log(
                     f"[MOVER] APPROACH: obstacle in center at ≈{nearest_cm:.0f}cm "
                     f"→ steering {deg:+.0f}°"
                 )
-                speak(f"Obstacle ahead. Steering around.")
+                speak("Obstacle ahead. Steering around.")
                 do_turn(deg)
 
             status, _ = do_forward(speed, burst)
@@ -644,19 +675,33 @@ def mover_thread():
                 f"blocked={blocked} nearest≈{nearest_cm}cm clear={clear_path}"
             )
 
-            # Proactive avoidance: steer before driving if center is blocked
-            if blocked.get("center") and nearest_cm and nearest_cm < AVOID_STEER_DIST_CM:
-                deg = choose_avoid_turn()
-                obstacle_str = f"≈{nearest_cm:.0f}cm"
+            # ── Map-based proactive avoidance ─────────────────────────────
+            # Query the historical map for known obstacles ahead before
+            # committing to a forward burst.  Odometry drifts, so the cone
+            # is generous (MAP_AVOID_DIST_CM × 55 cm wide).
+            map_obs = map_recorder.obstacles_ahead(
+                odom.x, odom.y, odom.heading,
+                look_dist_cm=MAP_AVOID_DIST_CM,
+            )
+            if map_obs:
+                nearest_map_ev, map_fwd, _ = map_obs[0]
                 log(
-                    f"[MOVER] proactive avoid: obstacle in center at {obstacle_str} "
+                    f"[MAP] known '{nearest_map_ev.label}' at {map_fwd:.0f}cm ahead "
+                    f"({len(map_obs)} map obstacle(s) in cone)"
+                )
+                speak(f"Map shows {nearest_map_ev.label} ahead. Steering around.")
+                deg = choose_avoid_turn(map_obs)
+                do_turn(deg)
+            # ── Real-time camera avoidance ─────────────────────────────────
+            elif blocked.get("center") and nearest_cm and nearest_cm < AVOID_STEER_DIST_CM:
+                deg = choose_avoid_turn()
+                log(
+                    f"[MOVER] proactive avoid: obstacle in center at ≈{nearest_cm:.0f}cm "
                     f"→ clear_path={clear_path}, turning {deg:+.0f}°"
                 )
                 speak(f"Obstacle ahead at {int(nearest_cm)} centimetres. Steering {('right' if deg < 0 else 'left')}.")
                 do_turn(deg)
-                # Don't skip the forward drive; after turning, center should be clear
             elif blocked.get("center") and (nearest_cm is None or nearest_cm >= AVOID_STEER_DIST_CM):
-                # Obstacle visible but far enough — just log it
                 log(f"[MOVER] obstacle in center but distant (≈{nearest_cm}cm) — continuing")
 
             status, _ = do_forward(MOVE_SPEED, MOVE_BURST)
@@ -673,6 +718,25 @@ def mover_thread():
                 if _bumps_since_scan >= SCAN_EVERY_BUMPS:
                     _bumps_since_scan = 0
                     do_scan_360()
+
+
+# ── Map saver thread ─────────────────────────────────────────────────────────
+def map_saver_thread():
+    """
+    Periodically flush the in-memory map to disk so:
+      - sync_run.sh can transfer it to the Mac every 60 s
+      - a crash doesn't lose all accumulated map data
+    Saves both the raw events JSON (/tmp/roomba_events.json) and a rendered
+    PNG (/tmp/roomba_maps/map_<ts>.png).  Runs every MAP_SAVE_INTERVAL seconds.
+    """
+    while state_get("mode") != "STOP":
+        time.sleep(MAP_SAVE_INTERVAL)
+        try:
+            map_recorder.save_events()
+            map_path = map_recorder.save_map()
+            log(f"[MAP] saved → {map_path}")
+        except Exception as e:
+            log(f"[MAP] save error: {e}")
 
 
 # ── State writer thread ───────────────────────────────────────────────────────
@@ -739,6 +803,7 @@ def main():
     threads = [
         threading.Thread(target=_log_writer,         daemon=True, name="log"),
         threading.Thread(target=state_writer_thread,  daemon=True, name="state"),
+        threading.Thread(target=map_saver_thread,     daemon=True, name="map"),
         threading.Thread(target=camera_thread,        daemon=True, name="camera"),
         threading.Thread(target=mover_thread,                      name="mover"),
     ]

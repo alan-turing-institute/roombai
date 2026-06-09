@@ -47,15 +47,20 @@ while [[ ! -f "$STOP_FILE" ]]; do
         "$PI_HOST:/tmp/roomba_frames/" \
         "$RUN_DIR/frames/"
 
-    # ── Maps: re-download (updated when the run ends) ─────────────────────
+    # ── Events JSON: re-download (flushed every MAP_SAVE_INTERVAL seconds) ──
     rsync_pi \
-        "$PI_HOST:/tmp/roomba_map*.png" \
-        "$PI_HOST:/tmp/roomba_map*.json" \
-        "$RUN_DIR/" 2>/dev/null || true
+        "$PI_HOST:/tmp/roomba_events.json" \
+        "$RUN_DIR/"
+
+    # ── Map PNGs: incremental — each save produces a new timestamped file ─
+    rsync_pi --ignore-existing \
+        "$PI_HOST:/tmp/roomba_maps/" \
+        "$RUN_DIR/maps/"
 
     frame_count=$(ls "$RUN_DIR/frames/" 2>/dev/null | wc -l | tr -d ' ')
+    map_count=$(ls "$RUN_DIR/maps/" 2>/dev/null | wc -l | tr -d ' ')
     log_lines=$(wc -l < "$RUN_DIR/roomba_log.txt" 2>/dev/null || echo 0)
-    echo "[$TS][sync] frames=$frame_count  log_lines=$log_lines"
+    echo "[$TS][sync] frames=$frame_count  maps=$map_count  log_lines=$log_lines"
 
     # Sleep in 5-second increments so the stop file is noticed quickly
     for _ in $(seq 1 12); do
@@ -80,10 +85,13 @@ rsync_pi --ignore-existing \
     "$RUN_DIR/frames/"
 
 rsync_pi \
-    "$PI_HOST:/tmp/roomba_map*.png" \
-    "$PI_HOST:/tmp/roomba_map*.json" \
-    "$RUN_DIR/" 2>/dev/null || true
+    "$PI_HOST:/tmp/roomba_events.json" \
+    "$RUN_DIR/"
+rsync_pi --ignore-existing \
+    "$PI_HOST:/tmp/roomba_maps/" \
+    "$RUN_DIR/maps/"
 
 frame_count=$(ls "$RUN_DIR/frames/" 2>/dev/null | wc -l | tr -d ' ')
+map_count=$(ls "$RUN_DIR/maps/" 2>/dev/null | wc -l | tr -d ' ')
 log_lines=$(wc -l < "$RUN_DIR/roomba_log.txt" 2>/dev/null || echo 0)
-echo "[sync] done — frames=$frame_count  log_lines=$log_lines  data at: $RUN_DIR"
+echo "[sync] done — frames=$frame_count  maps=$map_count  log_lines=$log_lines  data at: $RUN_DIR"
