@@ -12,8 +12,15 @@ flowchart LR
 
 # Launch the simulator (opens an 800×800 window)
 
+```bash
+cargo run -p simulator
 ```
-    cargo run -p simulator
+
+- Optional speed multiplier (1‑100×)
+- Provide a number after `--` to set the simulation speed, e.g.:
+
+```bash
+cargo run -p simulator -- 25   # runs at 25× speed
 ```
 
 In another terminal, send commands exactly as you would to the real pilot:

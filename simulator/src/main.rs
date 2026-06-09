@@ -5,7 +5,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-
+use std::env;
 mod map_data;
 
 const WHEEL_SPAN_MM: f32 = 235.0;
@@ -979,8 +979,9 @@ s.arm(Duration::from_secs_f64(secs));
                 return "ERR usage: speed <multiplier>".into();
             }
             let val: f32 = num!(rest[0], f32);
-            state.lock().unwrap().speed = val;
-            format!("OK speed {val}")
+            let clamped = val.clamp(1.0, 100.0);
+            state.lock().unwrap().speed = clamped;
+            format!("OK speed {clamped}")
         }
 
         "target" => {
@@ -1065,8 +1066,17 @@ async fn main() {
             obs.len(), enigma_obs_count, hums.len(), enigma_hums_count);
     };
     print_diagnostics(&obstacles, &humans);
-
+    // Parse optional speed multiplier from command line (1.0‑100.0)
+    let args: Vec<String> = env::args().collect();
+    let mut cli_speed: f32 = 1.0;
+    if args.len() > 1 {
+        if let Ok(v) = args[1].parse::<f32>() {
+            cli_speed = v.clamp(1.0, 100.0);
+        }
+    }
     let state = Arc::new(Mutex::new(RobotState::new()));
+    // Apply CLI speed value
+    state.lock().unwrap().speed = cli_speed;
     start_tcp_server(Arc::clone(&state));
 
     loop {
@@ -1076,10 +1086,7 @@ async fn main() {
         let speed_val = state.lock().unwrap().speed;
 
         // Speed toggle: S key switches between 1× and 10×
-        if is_key_pressed(KeyCode::S) {
-            let mut s = state.lock().unwrap();
-            s.speed = if s.speed > 1.0 { 1.0 } else { 10.0 };
-        }
+        // Speed toggle via key disabled; speed set via CLI argument only
 
         // 1. Human-Reactive Door Updates (doors open when a human is near, close immediately with 50% probability when they leave)
         for (idx, door) in doors.iter_mut().enumerate() {
@@ -1248,7 +1255,7 @@ async fn main() {
         clear_background(Color::from_rgba(20, 22, 28, 255)); // sleek dark background
 
         // Retrieve robot state details for rendering
-        let (rx, ry, heading, vel, angular, trail_snap, b_l, b_r, lidar_snap, seen_snap) = {
+        let (rx, ry, heading, vel, angular, trail_snap, b_l, b_r, lidar_snap, seen_snap, speed_val) = {
             let s = state.lock().unwrap();
             (
                 s.x,
@@ -1261,6 +1268,7 @@ async fn main() {
                 s.bump_right,
                 s.lidar_distances,
                 s.seen_grid.clone(),
+                s.speed,
             )
         };
 

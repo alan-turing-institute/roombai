@@ -102,7 +102,7 @@ The simulator runs a TCP listener on `127.0.0.1:9999` to accept control protocol
 | `ping` | None | `OK pong` | Health check. |
 | `safe` / `full` | None | `OK safe` / `OK full` | Mode transitions. |
 | `stop` | None | `OK stop` | Halts Roomba. |
-| `speed` | `<multiplier>` | `OK speed <val>` | Sets simulation speed multiplier (e.g. `10.0`). |
+| `speed` | `<multiplier>` | `OK speed <val>` | Sets simulation speed multiplier (1.0–100.0). Values outside this range are clamped. |
 | `move` | `<cm>` | `OK move <cm> (~<sec>s)` | Drives Roomba forward/backward by a distance. |
 | `turn` | `<deg>` | `OK turn <deg> (~<sec>s)` | Rotates Roomba in place (+ = CCW, - = CW). |
 | `go` | `<cm/s> <deg/s>` | `OK go <cm/s> <deg/s>` | Raw differential speed + rotation (3s timeout). |
