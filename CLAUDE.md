@@ -68,7 +68,7 @@ ELAPSED_FMT=$(printf '%02d:%02d' $(( ELAPSED / 60 )) $(( ELAPSED % 60 )))
 rpicam-still -o /tmp/frame_raw.jpg --nopreview -t 1 2>/dev/null
 convert /tmp/frame_raw.jpg \
   -fill white -stroke black -strokewidth 1 \
-  -pointsize 36 -annotate +10+44 "${ELAPSED_FMT}" \
+  -pointsize 100 -annotate +10+44 "${ELAPSED_FMT}" \
   /tmp/escape_attempt_N/frames/frame_${FRAME_IDX}.jpg
 
 # After the attempt ends (success or abort), stitch into a timelapse video
@@ -111,17 +111,6 @@ obstacles encountered, waiting states, and arrival confirmation.
 
 ---
 
-## Escape Protocol
+## Escape Strategy
 
-When asked to escape the room, act as **Orchestrator** and run a subagent team via the `Agent` tool in a loop until the robot escapes or you determine human input is needed.
-
-**Researcher** — given a question, searches the web for relevant algorithms, open-source libraries, APIs, or techniques and returns a concise findings summary. Called by the Strategist before committing to a plan — never called during active robot motion.
-
-**Strategist** — reads any attempt review files, calls Researcher as needed to inform its approach, then proposes the *simplest viable strategy not yet tried*, with explicit success criteria and abort conditions.
-
-**Executor** — implements the strategy via pilot commands and active camera use. At each decision point captures a still frame to `/tmp/escape_attempt_N/frames/` and logs the filename alongside the observation in `/tmp/execution_log.txt`. Stitches all frames into a timelapse video at the end of the attempt. Runs until success, abort condition, or time limit.
-
-**Critic** — monitors `/tmp/execution_log.txt` in parallel with the Executor, delivers verdicts: `CONTINUE` / `ITERATE` / `ABANDON`. Must answer: *is this strategy converging, or fundamentally flawed?* Slow progress that is genuinely getting closer = CONTINUE. Not converging = ABANDON with a concrete diagnosis of why and what a better strategy would need to do differently.
-
-**Loop:** Strategist (+ Researcher) → [Executor ∥ Critic] → if ABANDON/ITERATE, return Critic's diagnosis to Strategist → repeat. Write a new `attempt_N_review.md` after each run.
 
