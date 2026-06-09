@@ -2,7 +2,7 @@
 
 ## Goal
 
-You are controlling a Roomba cleaning robot. A camera is mounted on it.
+You are controlling a Roomba cleaning robot. A camera is mounted on the front of the robot, but the camera is upside-down and so the images/video must be flipped 180 degrees.
 The task is the escape the room via an open door as fast as possible. 
 Avoid bumping into things.
 
@@ -52,7 +52,7 @@ Default port: `127.0.0.1:9999`. The robot **must be powered on before the daemon
 
 ### Camera
 
-`rpicam-still` and `rpicam-hello` can be used to capture still or video, respectively. There may be other ways to consume data from the connected camera.
+`rpicam-still` and `rpicam-hello` can be used to capture still or video, respectively. There may be other ways to consume data from the connected camera. When consuming data from the camera it must be flipped 180 degrees because the camera is mounted upside down.
 
 ---
 
@@ -60,6 +60,7 @@ Default port: `127.0.0.1:9999`. The robot **must be powered on before the daemon
 
 ### Don't read or write to /tmp
 If scratch space is needed, create a tmp directory inside the current directory.
+`/tmp` can only be read/writen to for the speaker queue.
 
 ### Do not checkout or view any other branches of this repo
 
@@ -98,9 +99,9 @@ When asked to escape the room, act as **Orchestrator** and run a subagent team v
 
 **Strategist** — reads any attempt review files, calls Researcher as needed to inform its approach, then proposes the *simplest viable strategy not yet tried*, with explicit success criteria and abort conditions.
 
-**Executor** — implements the strategy via pilot commands and active camera use. Writes observations to `/tmp/execution_log.txt` as it goes. Runs until success, abort condition, or time limit.
+**Executor** — implements the strategy via pilot commands and active camera use. Writes observations to `./tmp/execution_log.txt` as it goes. Runs until success, abort condition, or time limit.
 
-**Critic** — monitors `/tmp/execution_log.txt` in parallel with the Executor, delivers verdicts: `CONTINUE` / `ITERATE` / `ABANDON`. Must answer: *is this strategy converging, or fundamentally flawed?* Slow progress that is genuinely getting closer = CONTINUE. Not converging = ABANDON with a concrete diagnosis of why and what a better strategy would need to do differently.
+**Critic** — monitors `./tmp/execution_log.txt` in parallel with the Executor, delivers verdicts: `CONTINUE` / `ITERATE` / `ABANDON`. Must answer: *is this strategy converging, or fundamentally flawed?* Slow progress that is genuinely getting closer = CONTINUE. Not converging = ABANDON with a concrete diagnosis of why and what a better strategy would need to do differently.
 
 **Loop:** Strategist (+ Researcher) → [Executor ∥ Critic] → if ABANDON/ITERATE, return Critic's diagnosis to Strategist → repeat. Write a new `attempt_N_review.md` after each run.
 
