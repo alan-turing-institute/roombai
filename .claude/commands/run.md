@@ -80,74 +80,81 @@ ssh <pi_host> "pkill -f explore.py 2>/dev/null; pkill -f speak_queue 2>/dev/null
 ### 5. Ensure run.sh is executable on the Pi
 
 ```
-ssh <pi_host> "chmod +x /home/hackweek26/roombai/run.sh"
+ssh <pi_host> "chmod +x /home/hackweek26/roombai/run.sh /home/hackweek26/roombai/install_models.sh"
 ```
 
-### 6. Execute run.sh on the Pi
+### 6. Create the local run directory and start the live sync
 
-```
-ssh -t <pi_host> "bash /home/hackweek26/roombai/run.sh $ARGUMENTS"
-```
-
-The `-t` flag allocates a pseudo-TTY so Ctrl-C propagates correctly.
-
-`run.sh` performs in order:
-  a. **Model installer** — runs `install_models.sh`, which installs
-     `hailo-model-zoo` and `ultralytics` pip packages if missing, then
-     downloads any absent HEF files (yolo_seg, midas, fast_scnn, deeplab)
-     via `hailomz download`. Skips anything already present so repeated
-     runs are fast. Failures are warnings, not fatal.
-  b. **Vision model pre-flight** — calls `model_setup.ensure_models()`.
-     For each of the five Hailo models (yolo_det, yolo_seg, midas,
-     fast_scnn, deeplab) it: checks the HEF file exists and is valid,
-     downloads it via the Hailo model-zoo CLI if missing, and falls back
-     to ONNX → HEF compilation if download fails.
-     The run aborts here if the required `yolo_det` model cannot be resolved.
-  b. **Pilot daemon** — starts `roomba_pilot/target/debug/pilot serve /dev/ttyUSB0`
-     if not already running. Builds the binary first if the executable is absent.
-  c. **TTS daemon** — starts the espeak-ng speaker background process.
-  d. **explore.py** — runs the main exploration loop, which also calls
-     `ensure_models()` internally (instant because models are already resolved).
-
-### 7. Save run data to this machine
-
-After run.sh exits or is interrupted, download all run data from the Pi
-into a timestamped subfolder of `runs/` in the project root.
-
-Determine the timestamp:
+Determine the run timestamp and create the directory:
 ```
 TIMESTAMP=$(date +%Y-%m-%d_%H-%M)
 RUN_DIR="runs/$TIMESTAMP"
 mkdir -p "$RUN_DIR/frames"
 ```
 
-Download each item using sshpass (password is `aipi`):
+Start `sync_run.sh` in the background — it will download Pi data every 60 s,
+re-downloading logs and only fetching new frames (skipping already-downloaded ones).
+The password for the Pi is `aipi`.
 ```
-sshpass -p aipi rsync -az --ignore-missing-args \
-    <pi_host>:/tmp/roomba_log.txt \
-    <pi_host>:/tmp/roomba_state.json \
-    <pi_host>:/tmp/roomba_current.jpg \
-    <pi_host>:/tmp/pilot.log \
-    <pi_host>:/tmp/speak_queue.txt \
-    "$RUN_DIR/"
-
-sshpass -p aipi rsync -az --ignore-missing-args \
-    <pi_host>:/tmp/roomba_frames/ \
-    "$RUN_DIR/frames/"
-
-sshpass -p aipi rsync -az --ignore-missing-args \
-    <pi_host>:/tmp/roomba_map*.png \
-    <pi_host>:/tmp/roomba_map*.json \
-    "$RUN_DIR/"
+bash sync_run.sh "$RUN_DIR" <pi_host> aipi &
+SYNC_PID=$!
+echo "[run] live sync started (PID $SYNC_PID) → $RUN_DIR"
 ```
 
-Then print a summary of what was saved:
+### 7. Execute run.sh on the Pi (background so sync keeps running)
+
+Run the SSH session **in the background** so the sync loop continues in parallel:
 ```
+sshpass -p aipi ssh -o StrictHostKeyChecking=no -tt <pi_host> \
+    "bash /home/hackweek26/roombai/run.sh $ARGUMENTS" &
+SSH_PID=$!
+echo "[run] SSH session started (PID $SSH_PID)"
+```
+
+Then tail the local log so progress is visible:
+```
+tail -f "$RUN_DIR/roomba_log.txt" &
+TAIL_PID=$!
+```
+
+Wait for the SSH session to finish (you will be notified when the background
+job completes). Do NOT poll — just wait for the notification.
+
+`run.sh` performs in order:
+  a. **Model installer** — runs `install_models.sh`: installs `python3-numba`
+     via apt, installs `hailo-model-zoo` from `~/hailo-model-zoo`, installs
+     `ultralytics`, then downloads any absent HEFs (yolo_seg, midas, fast_scnn,
+     deeplab). Skips anything already present. Failures are warnings, not fatal.
+  b. **Vision model pre-flight** — validates all HEFs via `ensure_models()`.
+     Aborts if the required `yolo_det` model is missing.
+  c. **Pilot daemon** — starts `pilot serve /dev/ttyUSB0` if not running.
+  d. **TTS daemon** — starts the espeak-ng speaker background process.
+  e. **explore.py** — runs the main exploration loop.
+
+### 8. After the run ends: stop sync and finalise
+
+When the SSH session background job completes:
+
+Stop the log tail:
+```
+kill $TAIL_PID 2>/dev/null || true
+```
+
+Signal `sync_run.sh` to stop (it will do one final sync pass before exiting):
+```
+touch "$RUN_DIR/.sync_stop"
+```
+
+Wait a few seconds for the final sync to complete, then print a summary:
+```
+sleep 10
 echo "Run data saved to $RUN_DIR"
 ls -lh "$RUN_DIR/"
+echo "Frames downloaded: $(ls $RUN_DIR/frames/ | wc -l)"
+echo "Log lines: $(wc -l < $RUN_DIR/roomba_log.txt)"
 ```
 
-The `runs/` folder is in .gitignore so none of this is committed.
+The `runs/` folder is in .gitignore so none of this is committed to git.
 
 ### Error handling
 
