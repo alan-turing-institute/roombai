@@ -39,26 +39,42 @@ cargo build
 echo "✓ Pilot binary built at roomba_pilot/target/debug/pilot"
 cd "${REPO_ROOT}"
 
-# ── Step 3: SAS token file ────────────────────────────────────────────────────
+# ── Step 3: Azure credentials ─────────────────────────────────────────────────
 echo ""
-echo "━━━ Step 3/4 — Azure Blob SAS token ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-SAS_TOKEN_FILE="${HOME}/.secrets/roombai_sas"
+echo "━━━ Step 3/4 — Azure Blob credentials ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 mkdir -p "${HOME}/.secrets"
-if [ -f "$SAS_TOKEN_FILE" ]; then
-    echo "  SAS token file already exists at ${SAS_TOKEN_FILE} — skipping"
-    echo "  (to update: replace the contents of that file and re-run)"
+chmod 700 "${HOME}/.secrets"
+
+ACCOUNT_FILE="${HOME}/.secrets/roombai_account"
+SAS_FILE="${HOME}/.secrets/roombai_sas"
+
+if [ -f "$ACCOUNT_FILE" ]; then
+    echo "  Account name already saved at ${ACCOUNT_FILE} — skipping"
+    echo "  (to update: overwrite the file and re-run)"
 else
     echo ""
-    echo "  Paste your Azure Blob SAS URL below (from the Azure portal)."
-    echo "  It should start with: https://<account>.blob.core.windows.net/?sv=..."
-    echo ""
-    read -rp "  SAS URL: " sas_url
-    echo "$sas_url" > "$SAS_TOKEN_FILE"
-    chmod 600 "$SAS_TOKEN_FILE"
-    echo "✓ SAS token saved to ${SAS_TOKEN_FILE}"
+    read -rp "  Storage account name (e.g. myaccount): " azure_account
+    echo "$azure_account" > "$ACCOUNT_FILE"
+    chmod 600 "$ACCOUNT_FILE"
+    echo "✓ Account name saved to ${ACCOUNT_FILE}"
 fi
-echo ""
-echo "  Also set your storage account name in scripts/upload_run.sh (AZURE_ACCOUNT)."
+
+if [ -f "$SAS_FILE" ]; then
+    echo "  SAS token already saved at ${SAS_FILE} — skipping"
+    echo "  (to update: overwrite the file and re-run)"
+else
+    echo ""
+    echo "  Paste the SAS token query string from the Azure portal."
+    echo "  This is the part AFTER the '?' — e.g: sv=2026-02-06&ss=b&srt=co&sp=wlctfx&..."
+    echo "  (do NOT include the leading '?' or the full URL)"
+    echo ""
+    read -rp "  SAS token: " sas_token
+    # Strip leading ? if accidentally included
+    sas_token="${sas_token#\?}"
+    echo "$sas_token" > "$SAS_FILE"
+    chmod 600 "$SAS_FILE"
+    echo "✓ SAS token saved to ${SAS_FILE}"
+fi
 
 # ── Step 4: verify ────────────────────────────────────────────────────────────
 echo ""

@@ -3,22 +3,18 @@
 #
 # Usage:
 #   ./upload_run.sh <attempt_dir>
-#   ./upload_run.sh /tmp/escape_attempt_3
 #
 # ── One-time setup ────────────────────────────────────────────────────────────
-# 1. Generate a SAS token in the Azure portal (Blob + Container + Object,
-#    Write + List + Create permissions) and save it to a file:
-#      mkdir -p ~/.secrets
-#      echo "https://youraccount.blob.core.windows.net/?sv=..." > ~/.secrets/roombai_sas
-#      chmod 600 ~/.secrets/roombai_sas
-#
-# 2. Set the storage account name below (AZURE_ACCOUNT).
+# Run ./setup.sh which will prompt for and save:
+#   ~/.secrets/roombai_account  — storage account name (e.g. myaccount)
+#   ~/.secrets/roombai_sas      — SAS token query string only (the part after the ?)
+#                                 e.g. sv=2026-02-06&ss=b&srt=co&sp=wlctfx&...
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
 
-AZURE_ACCOUNT="<your-storage-account-name>"
-SAS_TOKEN_FILE="${HOME}/.secrets/roombai_sas"
+ACCOUNT_FILE="${HOME}/.secrets/roombai_account"
+SAS_FILE="${HOME}/.secrets/roombai_sas"
 CONTAINER="attempts"
 
 if [ $# -ne 1 ]; then
@@ -38,18 +34,25 @@ if ! command -v rclone &>/dev/null; then
     exit 1
 fi
 
-if [ ! -f "$SAS_TOKEN_FILE" ]; then
-    echo "Error: SAS token file not found at ${SAS_TOKEN_FILE}"
-    echo "  Generate a SAS token in the Azure portal and save it:"
-    echo "    mkdir -p ~/.secrets"
-    echo "    echo 'https://...' > ${SAS_TOKEN_FILE}"
-    echo "    chmod 600 ${SAS_TOKEN_FILE}"
-    exit 1
-fi
+for f in "$ACCOUNT_FILE" "$SAS_FILE"; do
+    if [ ! -f "$f" ]; then
+        echo "Error: missing secrets file: ${f}"
+        echo "  Re-run ./setup.sh to configure Azure credentials."
+        exit 1
+    fi
+done
 
-SAS_TOKEN=$(cat "$SAS_TOKEN_FILE" | tr -d '[:space:]')
+AZURE_ACCOUNT=$(cat "$ACCOUNT_FILE" | tr -d '[:space:]')
+SAS_TOKEN=$(cat "$SAS_FILE" | tr -d '[:space:]')
+
+# Strip leading ? if someone accidentally included it
+SAS_TOKEN="${SAS_TOKEN#\?}"
+
+# Build the full SAS URL rclone expects
+SAS_URL="https://${AZURE_ACCOUNT}.blob.core.windows.net/?${SAS_TOKEN}"
+
 ATTEMPT_NAME=$(basename "$ATTEMPT_DIR")
-REMOTE=":azureblob,account=${AZURE_ACCOUNT},sas_url=${SAS_TOKEN}:${CONTAINER}"
+REMOTE=":azureblob,account=${AZURE_ACCOUNT},sas_url=${SAS_URL}:${CONTAINER}"
 
 echo "Uploading ${ATTEMPT_NAME} → ${CONTAINER}/${ATTEMPT_NAME} ..."
 rclone copy "$ATTEMPT_DIR" "${REMOTE}/${ATTEMPT_NAME}" --progress
