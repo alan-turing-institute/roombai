@@ -29,6 +29,8 @@ fi
 # ── Step 3: TTS daemon ───────────────────────────────────────────────────────
 echo ""
 echo "━━━ Step 3/6 — Starting TTS daemon ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# Kill any stale TTS daemon leftover from a previous run
+pkill -f 'tail -n 0 -f /tmp/speak_queue.txt' 2>/dev/null || true
 touch /tmp/speak_queue.txt
 nohup bash -c 'tail -n 0 -f /tmp/speak_queue.txt | while IFS= read -r line; do espeak-ng -s 145 -- "$line" 2>/dev/null; done' \
   > /tmp/speak_daemon.log 2>&1 &
@@ -37,6 +39,12 @@ echo "✓ TTS daemon started"
 # ── Step 4: pilot daemon ─────────────────────────────────────────────────────
 echo ""
 echo "━━━ Step 4/6 — Starting pilot daemon ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# Kill any stale pilot daemon still holding the serial port from a previous run
+if fuser "$SERIAL" >/dev/null 2>&1; then
+    echo "Port ${SERIAL} busy — killing stale process holding it..."
+    fuser -k "$SERIAL" 2>/dev/null || true
+    sleep 1
+fi
 cd "${REPO_ROOT}/roomba_pilot"
 nohup ./target/debug/pilot serve "$SERIAL" > /tmp/pilot_daemon.log 2>&1 &
 PILOT_PID=$!
