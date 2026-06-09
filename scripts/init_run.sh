@@ -10,7 +10,9 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 STATE_FILE="/tmp/run_state.env"
 
-ATTEMPT_N=$(( $(ls -d /tmp/escape_attempt_* 2>/dev/null | wc -l) + 1 ))
+shopt -s nullglob
+existing_attempts=(/tmp/escape_attempt_*)
+ATTEMPT_N=$(( ${#existing_attempts[@]} + 1 ))
 ATTEMPT_DIR="/tmp/escape_attempt_${ATTEMPT_N}"
 mkdir -p "${ATTEMPT_DIR}/frames"
 
