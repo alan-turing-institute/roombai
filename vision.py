@@ -316,28 +316,37 @@ def detect_door_cv(img_bgr: np.ndarray) -> dict:
 
         lines = cv2.HoughLinesP(
             edges, rho=1, theta=np.pi / 180, threshold=50,
-            minLineLength=int(h * 0.25), maxLineGap=25,
+            minLineLength=int(h * 0.40), maxLineGap=25,
         )
-        vert_xs: list[int] = []
+        # Collect (x_center, y_span) for each near-vertical segment
+        vert_segs: list[tuple[int, int]] = []   # (x_center, y_span_px)
         if lines is not None:
             for (x1, y1, x2, y2), in lines:
                 dx, dy = abs(x2 - x1), abs(y2 - y1)
                 if dy > 0 and dx / dy < 0.25:
-                    vert_xs.append((x1 + x2) // 2)
+                    xc   = (x1 + x2) // 2
+                    span = abs(y2 - y1)
+                    vert_segs.append((xc, span))
 
-        if len(vert_xs) < 2:
+        if len(vert_segs) < 2:
             return null
 
-        vert_xs.sort()
-        clusters: list[int] = []
-        group = [vert_xs[0]]
-        for x in vert_xs[1:]:
-            if x - group[-1] < 40:
-                group.append(x)
+        vert_segs.sort(key=lambda s: s[0])
+        vert_xs = [s[0] for s in vert_segs]
+
+        # Cluster x-positions; track max span within each cluster
+        clusters: list[tuple[int, int]] = []    # (x_center, max_span)
+        grp_xs    = [vert_xs[0]]
+        grp_spans = [vert_segs[0][1]]
+        for xc, span in vert_segs[1:]:
+            if xc - grp_xs[-1] < 40:
+                grp_xs.append(xc)
+                grp_spans.append(span)
             else:
-                clusters.append(int(np.mean(group)))
-                group = [x]
-        clusters.append(int(np.mean(group)))
+                clusters.append((int(np.mean(grp_xs)), max(grp_spans)))
+                grp_xs    = [xc]
+                grp_spans = [span]
+        clusters.append((int(np.mean(grp_xs)), max(grp_spans)))
 
         if len(clusters) < 2:
             return null
@@ -346,9 +355,13 @@ def detect_door_cv(img_bgr: np.ndarray) -> dict:
         best_score = 0.0
         for i in range(len(clusters)):
             for j in range(i + 1, len(clusters)):
-                lx, rx = clusters[i], clusters[j]
-                gap    = rx - lx
-                if not (0.15 * w < gap < 0.70 * w):
+                (lx, lspan), (rx, rspan) = clusters[i], clusters[j]
+                gap = rx - lx
+
+                # Require a wide gap (≥ 20 % of frame) and tall pillar lines (≥ 40 % of frame)
+                if not (0.20 * w < gap < 0.70 * w):
+                    continue
+                if max(lspan, rspan) < h * 0.40:
                     continue
 
                 edge_dens  = float(edges[:, lx:rx].mean()) / 255.0
@@ -365,7 +378,7 @@ def detect_door_cv(img_bgr: np.ndarray) -> dict:
                     best_score = score
                     best = (lx, rx, gap_bright, sur_bright, edge_dens)
 
-        if best is None or best_score < 15.0:
+        if best is None or best_score < 50.0:
             return null
 
         lx, rx, gap_bright, sur_bright, edge_dens = best

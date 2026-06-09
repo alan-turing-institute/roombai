@@ -37,6 +37,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from map_maker import MapRecorder
 from vision import (
     OdometryTracker,
     analyze_motion,
@@ -61,7 +62,9 @@ MOVE_SPEED      = 35    # cm/s forward speed
 MOVE_BURST      = 3.0   # seconds per forward burst
 TURN_AFTER_BUMP = 90    # degrees to turn after bumping (always CW)
 
-DOOR_CONFIRM_FRAMES = 2
+DOOR_CONFIRM_FRAMES = 3
+DOOR_CONFIRM_MIN_CONF = 0.10   # ignore detections below this confidence
+SCAN_EVERY_BUMPS = 6           # pause for a 360° scan every N bumps
 APPROACH_SLOW_DIST  = 150  # cm — half-speed below this
 APPROACH_STOP_DIST  = 40   # cm — stop and declare arrival
 
@@ -89,7 +92,8 @@ _state: dict = {
     "log_lines":       0,
 }
 
-odom = OdometryTracker()
+odom         = OdometryTracker()
+map_recorder = MapRecorder()
 
 
 def state_get(key):
@@ -270,11 +274,27 @@ def camera_thread():
                 log("[YOLO] person visible — door may open soon")
                 speak("Person detected. Watching for door.")
 
+            # Record blocking obstacles on the map
+            rx, ry, rh = odom.x, odom.y, odom.heading
+            for det in blocking:
+                map_recorder.record_yolo(
+                    rx, ry, rh,
+                    det["class_name"],
+                    det["position"],
+                    det.get("distance_cm"),
+                )
+
         # ── Door detection ────────────────────────────────────────────────
         door = detect_door_cv(curr_img)
         state_set(last_door=door)
 
-        if door["door_visible"]:
+        if door["door_visible"] and door.get("confidence", 0) >= DOOR_CONFIRM_MIN_CONF:
+            map_recorder.record_door(
+                odom.x, odom.y, odom.heading,
+                door.get("door_position") or "center",
+                door.get("door_distance_cm"),
+                door.get("door_open", False),
+            )
             dist = door.get("door_distance_cm")
             log(
                 f"[DOOR] frame {frame_num}: {door['notes']} "
@@ -294,6 +314,18 @@ def camera_thread():
                     speak("I am in the doorway. Mission complete.")
                     state_set(mode="STOP")
                     door_confirm_count = 0
+
+            elif door["door_open"] and mode == "APPROACH":
+                # Correct bearing while approaching based on where the door sits in frame
+                pos    = door.get("door_position", "center")
+                offset = {"left": 25, "center": 0, "right": -25}.get(pos, 0)
+                if abs(offset) > 0:
+                    new_bearing = (odom.heading + offset) % 360
+                    log(
+                        f"[VISION] APPROACH: door on {pos}, correcting bearing "
+                        f"→ {new_bearing:.0f}°"
+                    )
+                    state_set(door_bearing=new_bearing)
 
             elif door["door_open"] and mode not in ("APPROACH", "STOP", "WAIT"):
                 pos     = door.get("door_position", "center")
@@ -320,12 +352,14 @@ def mover_thread():
     moves_since_full   = 0
     _approach_bumps    = 0
     _consecutive_stuck = 0
+    _bumps_since_scan  = 0
 
     def do_forward(speed: int, secs: float) -> str:
         r = send_cmd(f"forward {speed} {secs:.1f}")
         odom.forward(speed, secs)
         state_set(pos_x=odom.x, pos_y=odom.y)
         time.sleep(secs + 0.1)
+        map_recorder.record_position(odom.x, odom.y, odom.heading)
         return r
 
     def do_back(speed: int = MOVE_SPEED, secs: float = 0.8) -> str:
@@ -344,6 +378,16 @@ def mover_thread():
     def bumped() -> tuple[bool, bool]:
         r = send_cmd("bumps")
         return "bumpL=1" in r, "bumpR=1" in r
+
+    def do_scan_360():
+        """Stop and rotate 360° in 8 steps, pausing at each heading for the camera."""
+        log("[MOVER] SCAN: rotating 360° to look for door")
+        speak("Pausing to scan for door.")
+        for _ in range(8):
+            if state_get("mode") in ("APPROACH", "STOP"):
+                break
+            do_turn(-45)
+            time.sleep(2.2)   # camera captures every 2s; give it a frame at each heading
 
     def choose_avoid_turn() -> float:
         """
@@ -438,6 +482,7 @@ def mover_thread():
             if bl or br:
                 _approach_bumps += 1
                 log(f"[MOVER] APPROACH: bump ({_approach_bumps}/5)")
+                map_recorder.record_bump(odom.x, odom.y, odom.heading)
                 do_back(MOVE_SPEED, 0.8)
                 do_turn(45 if br else -45)
                 if _approach_bumps >= 5:
@@ -481,8 +526,13 @@ def mover_thread():
                 log(f"[MOVER] bump {side} at heading={odom.heading:.0f}°")
                 speak("Bump. Turning right.")
                 state_set(bumps=state_get("bumps") + 1)
+                map_recorder.record_bump(odom.x, odom.y, odom.heading)
                 do_back(MOVE_SPEED, 0.5)
                 do_turn(-TURN_AFTER_BUMP)   # always CW for consistent wall-following
+                _bumps_since_scan += 1
+                if _bumps_since_scan >= SCAN_EVERY_BUMPS:
+                    _bumps_since_scan = 0
+                    do_scan_360()
 
 
 # ── State writer thread ───────────────────────────────────────────────────────
@@ -536,6 +586,16 @@ def main():
 
     threads[-1].join()
     log("explore.py done.")
+
+    log("Saving run map…")
+    try:
+        map_recorder.save_events()
+        map_path = map_recorder.save_map()
+        log(f"Map saved: {map_path}")
+        speak(f"Run complete. Map saved.")
+    except Exception as e:
+        log(f"Map save failed: {e}")
+
     speak("Exploration complete.")
 
 
