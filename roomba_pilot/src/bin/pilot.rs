@@ -98,11 +98,48 @@ fn serve(serial_path: &str, tcp_port: u16) -> Result<(), Box<dyn std::error::Err
 
     let mut robot = Robot::new(port);
     // Wake + enter safe mode, mirroring create.py's startup delays.
-    thread::sleep(Duration::from_millis(300));
+    thread::sleep(Duration::from_millis(500));
     robot.start()?;
-    thread::sleep(Duration::from_millis(300));
+    thread::sleep(Duration::from_millis(500));
     robot.enter_safe()?;
-    thread::sleep(Duration::from_millis(100));
+    thread::sleep(Duration::from_millis(500));
+
+    // Verify the mode took effect; retry generously so a robot waking from
+    // deep sleep (which takes several seconds) is handled without failing.
+    const INIT_TRIES: u8 = 10;
+    for attempt in 1..=INIT_TRIES {
+        match robot.query(&[sensors::OI_MODE]) {
+            Ok(r) if r[0].value == 2 => break,
+            Ok(r) if attempt == INIT_TRIES => {
+                return Err(format!(
+                    "could not enter SAFE mode after {} attempts (mode={})",
+                    INIT_TRIES, r[0].value
+                )
+                .into());
+            }
+            Ok(r) => {
+                println!(
+                    "pilot: mode={} (not safe), re-sending SAFE (attempt {}/{})",
+                    r[0].value, attempt, INIT_TRIES
+                );
+                robot.enter_safe()?;
+                thread::sleep(Duration::from_millis(500));
+            }
+            Err(e) if attempt == INIT_TRIES => {
+                return Err(format!("mode query failed after {} attempts: {}", INIT_TRIES, e).into());
+            }
+            Err(e) => {
+                println!(
+                    "pilot: mode query failed ({e}), retrying (attempt {}/{})",
+                    attempt, INIT_TRIES
+                );
+                robot.start()?;
+                thread::sleep(Duration::from_millis(500));
+                robot.enter_safe()?;
+                thread::sleep(Duration::from_millis(500));
+            }
+        }
+    }
     println!("pilot: robot in SAFE mode");
 
     let shared = Arc::new(Shared {
