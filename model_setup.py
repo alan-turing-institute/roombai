@@ -59,11 +59,6 @@ MODEL_ZOO_INFO: dict[str, dict] = {
         "onnx_source": "ultralytics",
         "required": False,
     },
-    "midas": {
-        "zoo_name": "midas_v2_1_small",
-        "onnx_source": "torch_hub",
-        "required": False,
-    },
     "fast_scnn": {
         "zoo_name": "fast_scnn",
         "onnx_source": None,            # no simple auto-export; manual only
@@ -75,6 +70,50 @@ MODEL_ZOO_INFO: dict[str, dict] = {
         "required": False,
     },
 }
+
+# fast_depth is an ONNX model run on CPU via onnxruntime — not a Hailo HEF.
+# No depth model in the Hailo model zoo supports hailo8l, and the Hailo
+# Dataflow Compiler (DFC) is x86-only so cannot compile on the Pi.
+# fast_depth (dwofk/fast-depth, MIT licence) is tiny (1.35M params / 0.74G ops)
+# and fast enough on the Pi 5 CPU for 2-second frame intervals.
+_FAST_DEPTH_ONNX_URL = (
+    "https://hailo-model-zoo.s3.eu-west-2.amazonaws.com"
+    "/DepthEstimation/indoor/fast_depth/pretrained/2021-10-18/fast_depth.zip"
+)
+_FAST_DEPTH_ONNX_PATH = Path.home() / ".cache" / "fast_depth" / "fastdepth.onnx"
+
+# ── fast_depth ONNX download ──────────────────────────────────────────────────
+def _ensure_fast_depth_onnx() -> bool:
+    """
+    Download fast_depth.onnx from the Hailo model-zoo S3 bucket if not present.
+    Returns True if the file is ready, False on failure.
+    """
+    if _FAST_DEPTH_ONNX_PATH.exists() and _FAST_DEPTH_ONNX_PATH.stat().st_size > 500_000:
+        _log("fast_depth: ONNX already present")
+        return True
+
+    _log(f"fast_depth: downloading ONNX from S3 → {_FAST_DEPTH_ONNX_PATH}")
+    _speak("Downloading fast_depth depth model.")
+    _FAST_DEPTH_ONNX_PATH.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import io
+        import urllib.request
+        import zipfile
+
+        data = urllib.request.urlopen(_FAST_DEPTH_ONNX_URL, timeout=120).read()
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            if "fastdepth.onnx" not in z.namelist():
+                _log(f"fast_depth: unexpected zip contents: {z.namelist()}")
+                return False
+            _FAST_DEPTH_ONNX_PATH.write_bytes(z.read("fastdepth.onnx"))
+
+        size_mb = _FAST_DEPTH_ONNX_PATH.stat().st_size / 1e6
+        _log(f"fast_depth: ONNX saved ({size_mb:.1f} MB)")
+        return True
+    except Exception as e:
+        _log(f"fast_depth: download failed — {e}")
+        return False
+
 
 # ── TTS helper (mirrors explore.py — no shared import to avoid circular deps) ─
 _SPEAK_FILE = Path("/tmp/speak_queue.txt")
@@ -392,6 +431,7 @@ def ensure_models(abort_if_required_missing: bool = True) -> dict[str, bool]:
 
     readiness: dict[str, bool] = {}
 
+    # ── Hailo HEF models ─────────────────────────────────────────────────────
     for name in MODEL_SPECS:
         _log(f"--- {name} ---")
         hef_path, status = _resolve_model(name)
@@ -412,6 +452,14 @@ def ensure_models(abort_if_required_missing: bool = True) -> dict[str, bool]:
                     f"Fix the model path or run the download steps above, then retry."
                 )
                 sys.exit(1)
+
+    # ── fast_depth ONNX (CPU / onnxruntime, primary depth sensor) ────────────
+    _log("--- fast_depth (ONNX/CPU) ---")
+    readiness["fast_depth"] = _ensure_fast_depth_onnx()
+    if readiness["fast_depth"]:
+        _log(f"fast_depth: READY  {_FAST_DEPTH_ONNX_PATH}")
+    else:
+        _log("fast_depth: MISSING — depth will fall back to optical flow only")
 
     ready   = [k for k, v in readiness.items() if v]
     missing = [k for k, v in readiness.items() if not v]

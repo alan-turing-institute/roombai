@@ -267,7 +267,7 @@ def camera_thread():
                 curr_odom[1] - prev_odom[1],
             )
 
-        # ── Run all vision models (YOLO-det, YOLO-seg, MiDaS, Fast-SCNN, DeepLabV3+,
+        # ── Run all vision models (YOLO-det, YOLO-seg, fast_depth, Fast-SCNN, DeepLabV3+,
         #    optical flow, OpenCV door detection) and fuse into one scene dict ──
         scene = analyze_scene(curr_img, prev_img=prev_img, baseline_cm=baseline_cm)
 
@@ -286,7 +286,7 @@ def camera_thread():
             if stuck and state_get("mode") in ("EXPLORE", "APPROACH"):
                 speak("Robot appears stuck. Changing direction.")
 
-        # ── Depth map (MiDaS) ────────────────────────────────────────────
+        # ── Depth map (fast_depth) ───────────────────────────────────────
         if scene["depth_map"] is not None:
             os_ = scene["open_space"]
             log(
@@ -527,7 +527,7 @@ def mover_thread():
           1. Historical map — known obstacle positions from previous collisions
              and camera detections (map_obs list, nearest obstacle first).
           2. Real-time YOLO blocked map — current camera frame obstacle thirds.
-          3. MiDaS open-space fractions — depth-map open-space estimate.
+          3. fast_depth open-space fractions — depth-map open-space estimate.
         Returns degrees to turn (+CCW, −CW).
         """
         blocked    = state_get("blocked") or {}
@@ -556,7 +556,7 @@ def mover_thread():
         if clear_path == "left" and not blocked.get("left"):
             return 40.0
 
-        # ── 3. MiDaS open-space fractions ───────────────────────────────────
+        # ── 3. fast_depth open-space fractions ──────────────────────────────
         ol  = open_space.get("left",  0.0)
         or_ = open_space.get("right", 0.0)
         if ol > or_ + 0.05:
@@ -763,7 +763,7 @@ def main():
     _greet_humans = args.greet
 
     log("=" * 60)
-    log("explore.py — YOLO + MiDaS + segmentation + OpenCV + flow depth")
+    log("explore.py — YOLO + fast_depth(CPU) + segmentation + OpenCV + flow depth")
     log(f"Strategy file: {STRATEGY_FILE}")
     log(f"Frames:        {FRAME_DIR}")
     log(f"Log:           {LOG_FILE}")

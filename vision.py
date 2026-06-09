@@ -4,7 +4,7 @@ vision.py — Multi-model vision pipeline for RoombaI.
 Models (Hailo AI Hat+ H8L unless noted CPU):
   yolo_det   YOLOv8s detection        COCO 80-class boxes + distance
   yolo_seg   YOLOv8n instance-seg     adds per-object pixel masks
-  midas      MiDaS v2.1-small         per-pixel monocular depth (single frame)
+  fast_depth fast-depth (ONNX/CPU)    per-pixel metric depth, primary sensor
   fast_scnn  Fast-SCNN segmentation   fast semantic labels (floor, obstacles)
   deeplab    DeepLabV3+               higher-quality semantic labels (door if ADE20K)
   opencv     OpenCV geometry  (CPU)   door pillar-gap detector, fused with depth
@@ -25,6 +25,11 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+
+# ── fast_depth ONNX path (CPU inference via onnxruntime) ─────────────────────
+_FAST_DEPTH_ONNX = Path.home() / ".cache" / "fast_depth" / "fastdepth.onnx"
+_fast_depth_session = None
+_fast_depth_input_name: str = "input.1"   # queried at load time
 
 # ── Camera intrinsics ─────────────────────────────────────────────────────────
 # Pi Camera v2/v3, 640×480, horizontal FOV ≈ 66°
@@ -49,12 +54,6 @@ MODEL_SPECS: dict[str, dict] = {
         "hef":      _MDIR / "yolov8n_seg_h8l.hef",
         "input_wh": (640, 640),
         "kind":     "yolo_seg",
-        "dataset":  "",
-    },
-    "midas": {
-        "hef":      _MDIR / "midas_v2_1_small_h8l.hef",
-        "input_wh": (256, 256),
-        "kind":     "midas",
         "dataset":  "",
     },
     "fast_scnn": {
@@ -132,7 +131,7 @@ KNOWN_HEIGHTS_CM: dict[str, float] = {
 _hailo_lock = threading.Lock()
 _hailo_vdev = None                       # one VDevice shared across all models
 _hailo_reg: dict[str, dict] = {}        # name → loaded model state
-MODELS_AVAILABLE: dict[str, bool] = {k: False for k in MODEL_SPECS}
+MODELS_AVAILABLE: dict[str, bool] = {k: False for k in MODEL_SPECS} | {"fast_depth": False}
 
 
 def _get_vdevice():
@@ -195,17 +194,56 @@ def _load_model(name: str) -> bool:
 
 
 def init_all_models() -> dict[str, bool]:
-    """Load every model in MODEL_SPECS. Call once at startup."""
+    """Load every model in MODEL_SPECS plus fast_depth ONNX. Call once at startup."""
     with _hailo_lock:
         for name in MODEL_SPECS:
             if not MODELS_AVAILABLE[name]:
                 _load_model(name)
+        _init_fast_depth()
     return dict(MODELS_AVAILABLE)
 
 
 def init_hailo(hef_path: str = "") -> bool:
     """Legacy alias — loads all models, returns True if yolo_det succeeded."""
     return init_all_models().get("yolo_det", False)
+
+
+def _init_fast_depth() -> bool:
+    """Load fast_depth ONNX session. Returns True on success."""
+    global _fast_depth_session, _fast_depth_input_name
+    if not _FAST_DEPTH_ONNX.exists():
+        print(f"[vision] fast_depth: ONNX not found at {_FAST_DEPTH_ONNX} — run ensure_models() first")
+        return False
+    try:
+        import onnxruntime as ort
+        sess = ort.InferenceSession(str(_FAST_DEPTH_ONNX), providers=["CPUExecutionProvider"])
+        _fast_depth_input_name = sess.get_inputs()[0].name
+        _fast_depth_session = sess
+        MODELS_AVAILABLE["fast_depth"] = True
+        print(f"[vision] fast_depth: loaded (ONNX/CPU, input={_fast_depth_input_name})")
+        return True
+    except Exception as e:
+        print(f"[vision] fast_depth: init failed — {e}")
+        return False
+
+
+def _infer_fast_depth(img_bgr: np.ndarray) -> np.ndarray | None:
+    """
+    Run fast_depth ONNX on CPU.
+    Returns H×W float32 metric depth map in metres, or None if unavailable.
+    Input is BGR uint8; model expects RGB float32 / 255 in NCHW format.
+    """
+    if _fast_depth_session is None:
+        return None
+    try:
+        resized = cv2.resize(img_bgr, (224, 224))
+        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        inp = np.transpose(rgb, (2, 0, 1))[np.newaxis]          # (1, 3, 224, 224)
+        result = _fast_depth_session.run(None, {_fast_depth_input_name: inp})
+        return result[0][0, 0]                                    # (H, W) in metres
+    except Exception as e:
+        print(f"[vision] fast_depth infer error: {e}")
+        return None
 
 
 # ── Raw Hailo inference ───────────────────────────────────────────────────────
@@ -307,8 +345,8 @@ def _fuse_distances(estimates: list[tuple[float, float]]) -> float | None:
     from dominating when two other methods agree.
 
     Weight guidelines (callers should pass these):
+      fast_depth    — 0.7     (metric depth, primary sensor, highest trust)
       optical flow  — 0.2–0.7 (scales with baseline_cm / 25, capped at 0.7)
-      MiDaS scaled  — 0.5     (single-frame relative depth, moderate trust)
       known height  — 0.3     (assumes typical object size, lowest trust)
     """
     if not estimates:
@@ -345,8 +383,8 @@ def _parse_yolo_boxes(
     Parse raw Hailo YOLO output into detection dicts.
 
     All available depth signals are combined via _fuse_distances():
+      fast_depth    w = 0.7      (metric depth, primary sensor — best single-frame signal)
       optical flow  w = 0.2–0.7  (scales with baseline; 20 cm scan rock → 0.7)
-      MiDaS scaled  w = 0.5      (single-frame relative, needs scene_depth_cm ref)
       known height  w = 0.3      (assumed typical object size, lowest trust)
 
     Estimates that diverge >50 % from the median are down-weighted 5× before
@@ -402,7 +440,8 @@ def _parse_yolo_boxes(
                     flow_w = min(0.7, 0.2 + baseline_cm / 25.0)
                     estimates.append((fd, flow_w))
 
-            # MiDaS centroid scaled by scene_depth_cm reference
+            # fast_depth: scene_depth_cm is the metric median; depth_map encodes
+            # normalised inverse depth so ref_inv/obj_inv gives the relative scale.
             if depth_map is not None and scene_depth_cm is not None:
                 dh, dw = depth_map.shape[:2]
                 cy_s = max(0, min(dh - 1, int(cy_px * dh / orig_h)))
@@ -411,7 +450,7 @@ def _parse_yolo_boxes(
                 ref_inv = float(depth_map[dh // 2, dw // 2])
                 if obj_inv > 0.05 and ref_inv > 0.05:
                     md = round(scene_depth_cm * ref_inv / obj_inv, 1)
-                    estimates.append((md, 0.5))
+                    estimates.append((md, 0.7))   # primary: metric depth
 
             # Known-height formula
             rh = KNOWN_HEIGHTS_CM.get(class_name)
@@ -444,24 +483,20 @@ def yolo_labels(detections: list[dict]) -> list[str]:
     return list({d["class_name"] for d in detections})
 
 
-# ── MiDaS depth parser ────────────────────────────────────────────────────────
-def _parse_midas(raw: dict[str, np.ndarray], orig_w: int, orig_h: int) -> np.ndarray | None:
+# ── fast_depth depth parser ───────────────────────────────────────────────────
+def _parse_fast_depth(depth_m: np.ndarray, orig_w: int, orig_h: int) -> np.ndarray:
     """
-    Returns H×W float32 depth map normalised to [0, 1]:
-      0 = far  (low inverse depth)
-      1 = close (high inverse depth)
-    MiDaS outputs relative inverse depth, so larger output → closer object.
+    Convert fast_depth metric output (H×W float32, metres) to a normalised
+    inverse-depth map [0, 1]: 1 = close, 0 = far.
+
+    The inversion matches the convention used by _open_space_from_depth and
+    detect_door_cv (low value = further away = potential open space).
     """
-    for arr in raw.values():
-        d = arr.squeeze()
-        if d.ndim != 2:
-            continue
-        d = d.astype(np.float32)
-        lo, hi = d.min(), d.max()
-        if hi > lo:
-            d = (d - lo) / (hi - lo)
-        return cv2.resize(d, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
-    return None
+    inv = 1.0 / (depth_m + 0.01)    # +0.01 avoids div/0 at zero-depth pixels
+    lo, hi = float(inv.min()), float(inv.max())
+    if hi > lo:
+        inv = (inv - lo) / (hi - lo)
+    return cv2.resize(inv.astype(np.float32), (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
 
 
 # ── Semantic segmentation parser ──────────────────────────────────────────────
@@ -684,7 +719,7 @@ def detect_door_cv(
             if not (50 < gap_real_cm < 150):
                 return {**null, "notes": f"rejected: gap real width {gap_real_cm:.0f} cm (not door-sized)"}
 
-        # Filter 4: MiDaS depth — gap should be further than surroundings
+        # Filter 4: fast_depth — gap should be further (lower inv-depth) than surroundings
         if depth_map is not None:
             dh, dw = depth_map.shape[:2]
             sx, sy = dw / w, dh / h
@@ -746,7 +781,7 @@ def analyze_scene(
     Keys:
       detections      list[dict]        YOLO objects: class, bbox, distance_cm,
                                         real_height_cm, position
-      depth_map       ndarray|None      H×W float32, 0=far / 1=close  (MiDaS)
+      depth_map       ndarray|None      H×W float32, 0=far / 1=close  (fast_depth)
       seg_map         ndarray|None      H×W uint8 class indices (best seg model)
       floor_mask      ndarray|None      H×W bool
       door_seg_mask   ndarray|None      H×W bool  ('door' class from seg, if available)
@@ -759,21 +794,23 @@ def analyze_scene(
     """
     orig_h, orig_w = img_bgr.shape[:2]
 
-    # 1. Optical flow
-    flow_field:     np.ndarray | None = None
-    scene_depth_cm: float | None      = None
+    # 1. fast_depth — primary depth sensor (metric, every frame, no motion needed)
+    depth_map: np.ndarray | None = None
+    scene_depth_cm: float | None = None
+    depth_m = _infer_fast_depth(img_bgr)
+    if depth_m is not None:
+        scene_depth_cm = round(float(np.median(depth_m)) * 100.0, 1)  # metres → cm
+        depth_map = _parse_fast_depth(depth_m, orig_w, orig_h)
+
+    # 2. Optical flow — stuck detection + per-object flow depth vectors
+    flow_field: np.ndarray | None = None
     stuck = False
     if prev_img is not None and baseline_cm >= 1.0:
         motion         = analyze_motion(prev_img, img_bgr, baseline_cm)
-        flow_field      = motion.get("flow_field")
-        scene_depth_cm  = motion.get("scene_depth_cm")
-        stuck           = motion.get("stuck", False)
-
-    # 2. MiDaS depth map (single-frame, no movement required)
-    depth_map: np.ndarray | None = None
-    raw = _hailo_infer("midas", img_bgr)
-    if raw is not None:
-        depth_map = _parse_midas(raw, orig_w, orig_h)
+        flow_field     = motion.get("flow_field")
+        stuck          = motion.get("stuck", False)
+        if scene_depth_cm is None:
+            scene_depth_cm = motion.get("scene_depth_cm")    # fallback when fast_depth unavailable
 
     # 3. YOLO detection
     detections: list[dict] = []
