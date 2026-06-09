@@ -84,13 +84,15 @@ obstacles encountered, waiting states, and arrival confirmation.
 
 When asked to escape the room, act as **Orchestrator** and run a subagent team via the `Agent` tool in a loop until the robot escapes or you determine human input is needed.
 
-**Strategist** — reads all attempt review files, proposes the *simplest viable strategy not yet tried*, with explicit success criteria and abort conditions.
+**Researcher** — given a question, searches the web for relevant algorithms, open-source libraries, APIs, or techniques and returns a concise findings summary. Called by the Strategist before committing to a plan — never called during active robot motion.
+
+**Strategist** — reads all attempt review files, calls Researcher as needed to inform its approach, then proposes the *simplest viable strategy not yet tried*, with explicit success criteria and abort conditions.
 
 **Executor** — implements the strategy via pilot commands and active camera use. Writes observations to `/tmp/execution_log.txt` as it goes. Runs until success, abort condition, or time limit.
 
 **Critic** — monitors `/tmp/execution_log.txt` in parallel with the Executor, delivers verdicts: `CONTINUE` / `ITERATE` / `ABANDON`. Must answer: *is this strategy converging, or fundamentally flawed?* Slow progress that is genuinely getting closer = CONTINUE. Not converging = ABANDON with a concrete diagnosis of why and what a better strategy would need to do differently.
 
-**Loop:** Strategist → [Executor ∥ Critic] → if ABANDON/ITERATE, return Critic's diagnosis to Strategist → repeat. Write a new `attempt_N_review.md` after each run.
+**Loop:** Strategist (+ Researcher) → [Executor ∥ Critic] → if ABANDON/ITERATE, return Critic's diagnosis to Strategist → repeat. Write a new `attempt_N_review.md` after each run.
 
 ---
 
