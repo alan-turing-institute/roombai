@@ -1871,7 +1871,7 @@ pub fn get_doors() -> Vec<Door> {
         Door { name: "Door 14".into(), p1: pdf_pt(799.07, 653.47), p2: pdf_pt(812.33, 653.47), is_open: true, is_top_door: false, is_external: false, is_target: false },
         Door { name: "Door 15".into(), p1: pdf_pt(1005.32, 444.87), p2: pdf_pt(1031.84, 444.87), is_open: true, is_top_door: false, is_external: false, is_target: false },
         Door { name: "Door 16".into(), p1: pdf_pt(1166.09, 776.92), p2: pdf_pt(1166.09, 790.18), is_open: false, is_top_door: true, is_external: false, is_target: false },
-        Door { name: "Door 17".into(), p1: pdf_pt(1277.28, 747.04), p2: pdf_pt(1277.28, 760.30), is_open: false, is_top_door: true, is_external: false, is_target: false },
+        Door { name: "Door 17".into(), p1: pdf_pt(1277.28, 747.04), p2: pdf_pt(1277.28, 760.30), is_open: false, is_top_door: true, is_external: false, is_target: true },
         // Enigma door 18
         Door { name: "Door 18".into(), p1: pdf_pt(1353.78, 744.08), p2: pdf_pt(1385.02, 744.08), is_open: true, is_top_door: false, is_external: false, is_target: false },
         Door { name: "Door 20".into(), p1: pdf_pt(1585.01, 744.08), p2: pdf_pt(1598.27, 744.08), is_open: false, is_top_door: true, is_external: false, is_target: false },

@@ -110,6 +110,8 @@ struct RobotState {
     seen_grid: Vec<bool>,      // visibility coverage grid (160x75 cells)
     target_door_mid: Option<Vec2>,
     target_door_open: bool,
+    reset_requested: bool,
+    escaped: bool,
 }
 
 impl Default for RobotState {
@@ -130,6 +132,8 @@ impl Default for RobotState {
             seen_grid: vec![false; 12000],
             target_door_mid: None,
             target_door_open: false,
+            reset_requested: false,
+            escaped: false,
         }
     }
 }
@@ -208,6 +212,8 @@ impl RobotState {
             seen_grid: vec![false; 12000],
             target_door_mid: None,
             target_door_open: false,
+            reset_requested: false,
+            escaped: false,
         }
     }
 
@@ -1078,6 +1084,21 @@ fn dispatch(line: &str, state: &Arc<Mutex<RobotState>>) -> String {
             }
         }
 
+        "pos" => {
+            let s = state.lock().unwrap();
+            format!("OK x={:.0} y={:.0} heading={:.4}", s.x, s.y, s.heading)
+        }
+
+        "reset" => {
+            state.lock().unwrap().reset_requested = true;
+            "OK reset queued".into()
+        }
+
+        "escaped" => {
+            let s = state.lock().unwrap();
+            format!("OK {}", s.escaped as u8)
+        }
+
         "shutdown" | "quit" => {
             state.lock().unwrap().stop();
             "OK shutdown".into()
@@ -1134,9 +1155,26 @@ async fn main() {
     let room_labels = map_data::get_room_labels();
 
     let roomba_start_pos = Vec2::new(1520.0 * PDF_TO_MM, 775.0 * PDF_TO_MM);
+    // Parse CLI: optional speed multiplier (float) and --humans flag
+    let args: Vec<String> = env::args().collect();
+    let mut cli_speed: f32 = 1.0;
+    let include_humans = args.iter().any(|a| a == "--humans");
+    for arg in args.iter().skip(1) {
+        if let Ok(v) = arg.parse::<f32>() {
+            cli_speed = v.clamp(1.0, 100.0);
+        }
+    }
+
     let mut obstacles = generate_obstacles(roomba_start_pos, &walls, &doors, &room_labels);
-    let mut humans = generate_humans(&room_labels, &walls, &doors);
-    let mut door_had_human_near = vec![false; doors.len()];
+    let mut humans: Vec<Human> = if include_humans {
+        generate_humans(&room_labels, &walls, &doors)
+    } else {
+        Vec::new()
+    };
+
+    // Door timer: all non-external doors toggle open/closed every 5 simulated seconds
+    let mut door_timer: f32 = 0.0;
+    let mut door_phase_open = false;
 
     let print_diagnostics = |obs: &[Obstacle], hums: &[Human]| {
         let enigma_obs_count = obs.iter().filter(|o| {
@@ -1149,16 +1187,8 @@ async fn main() {
             obs.len(), enigma_obs_count, hums.len(), enigma_hums_count);
     };
     print_diagnostics(&obstacles, &humans);
-    // Parse optional speed multiplier from command line (1.0‑100.0)
-    let args: Vec<String> = env::args().collect();
-    let mut cli_speed: f32 = 1.0;
-    if args.len() > 1 {
-        if let Ok(v) = args[1].parse::<f32>() {
-            cli_speed = v.clamp(1.0, 100.0);
-        }
-    }
+
     let state = Arc::new(Mutex::new(RobotState::new()));
-    // Apply CLI speed value
     state.lock().unwrap().speed = cli_speed;
     start_tcp_server(Arc::clone(&state));
 
@@ -1200,6 +1230,31 @@ async fn main() {
                 roomba_door_side = Some(side);
             }
         }
+        // Sync escaped state for TCP queries
+        state.lock().unwrap().escaped = succeeded;
+
+        // Handle TCP reset request
+        if state.lock().unwrap().reset_requested {
+            succeeded = false;
+            roomba_door_side = None;
+            door_timer = 0.0;
+            door_phase_open = false;
+            obstacles = generate_obstacles(roomba_start_pos, &walls, &doors, &room_labels);
+            humans = if include_humans {
+                generate_humans(&room_labels, &walls, &doors)
+            } else {
+                Vec::new()
+            };
+            let mut s = state.lock().unwrap();
+            s.x = roomba_start_pos.x;
+            s.y = roomba_start_pos.y;
+            s.heading = 0.0;
+            s.stop();
+            s.route.clear();
+            s.seen_grid.fill(false);
+            s.reset_requested = false;
+            s.escaped = false;
+        }
 
         // 2. Refresh Button and Obstacle Generation Interaction
         let mouse_pos = mouse_position();
@@ -1210,6 +1265,15 @@ async fn main() {
         if btn_clicked || (is_key_pressed(KeyCode::R) && !succeeded) {
             succeeded = false;
             roomba_door_side = None;
+            door_timer = 0.0;
+            door_phase_open = false;
+            obstacles = generate_obstacles(roomba_start_pos, &walls, &doors, &room_labels);
+            humans = if include_humans {
+                generate_humans(&room_labels, &walls, &doors)
+            } else {
+                Vec::new()
+            };
+            print_diagnostics(&obstacles, &humans);
             let mut s = state.lock().unwrap();
             s.x = roomba_start_pos.x;
             s.y = roomba_start_pos.y;
@@ -1217,10 +1281,7 @@ async fn main() {
             s.stop();
             s.route.clear();
             s.seen_grid.fill(false);
-            obstacles = generate_obstacles(roomba_start_pos, &walls, &doors, &room_labels);
-            humans = generate_humans(&room_labels, &walls, &doors);
-            door_had_human_near.fill(false);
-            print_diagnostics(&obstacles, &humans);
+            s.escaped = false;
         }
 
         if !succeeded {
@@ -1237,17 +1298,14 @@ async fn main() {
 
                 // Update humans and doors every human_skip substeps
                 if substep_idx % human_skip == 0 {
-                    // Open/close doors based on human proximity (inside substep loop so doors
-                    // open before humans collide with them in the same human-update cycle)
-                    for (idx, door) in doors.iter_mut().enumerate() {
-                        let any_near = humans.iter().any(|h| dist_to_segment(h.pos, door.p1, door.p2) < 1200.0);
-                        if any_near {
-                            door.is_open = true;
-                            door_had_human_near[idx] = true;
-                        } else if door_had_human_near[idx] {
-                            door_had_human_near[idx] = false;
-                            if macroquad::rand::gen_range(0.0, 1.0) < 0.5 {
-                                door.is_open = false;
+                    // Toggle all non-external doors every 5 simulated seconds
+                    door_timer += human_step;
+                    if door_timer >= 5.0 {
+                        door_timer -= 5.0;
+                        door_phase_open = !door_phase_open;
+                        for door in doors.iter_mut() {
+                            if !door.is_external {
+                                door.is_open = door_phase_open;
                             }
                         }
                     }
@@ -1647,6 +1705,15 @@ async fn main() {
             if (is_mouse_button_pressed(MouseButton::Left) && reset_hover) || is_key_pressed(KeyCode::R) {
                 succeeded = false;
                 roomba_door_side = None;
+                door_timer = 0.0;
+                door_phase_open = false;
+                obstacles = generate_obstacles(roomba_start_pos, &walls, &doors, &room_labels);
+                humans = if include_humans {
+                    generate_humans(&room_labels, &walls, &doors)
+                } else {
+                    Vec::new()
+                };
+                print_diagnostics(&obstacles, &humans);
                 let mut s = state.lock().unwrap();
                 s.x = roomba_start_pos.x;
                 s.y = roomba_start_pos.y;
@@ -1654,10 +1721,7 @@ async fn main() {
                 s.stop();
                 s.route.clear();
                 s.seen_grid.fill(false);
-                obstacles = generate_obstacles(roomba_start_pos, &walls, &doors, &room_labels);
-                humans = generate_humans(&room_labels, &walls, &doors);
-                door_had_human_near.fill(false);
-                print_diagnostics(&obstacles, &humans);
+                s.escaped = false;
             }
         }
 
