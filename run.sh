@@ -54,16 +54,12 @@ if ! python3 "$REPO_DIR/check_deps.py"; then
     fail "Critical Python dependencies missing and could not be installed. See above."
 fi
 
-# ── Step 0b: Claude Code setup (optional, non-fatal) ─────────────────────────
-step "Step 0b — Claude Code setup (installs CLI + configures yolo_new venv)"
-bash "$REPO_DIR/setup_claude_code.sh" || warn "Claude Code setup skipped (non-fatal)"
-
-# ── Step 0c: Install tools + download missing HEF files ───────────────────────
-step "Step 0c — Model installer (hailo-model-zoo tools + missing HEFs)"
+# ── Step 0b: Install tools + download missing HEF files ───────────────────────
+step "Step 0b — Model installer (hailo-model-zoo tools + missing HEFs)"
 bash "$REPO_DIR/install_models.sh"
 
 # Re-run dependency check after installs in case something was just added
-step "Step 0d — Re-check dependencies after model install"
+step "Step 0c — Re-check dependencies after model install"
 if ! python3 "$REPO_DIR/check_deps.py"; then
     fail "Critical dependencies still missing after install attempt."
 fi

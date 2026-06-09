@@ -30,7 +30,6 @@ from pathlib import Path
 HW_ARCH      = "hailo8l"           # Hailo AI Hat+ chip arch string
 MIN_HEF_BYTES = 500_000            # valid HEF files are several MB; reject tiny files
 DOWNLOAD_TIMEOUT = 600             # seconds per download attempt
-COMPILE_TIMEOUT  = 1800            # compilation can take 30 min
 
 # Primary output directory for downloaded/compiled HEFs
 OUTPUT_DIR = Path("/usr/share/hailo-models")
@@ -49,26 +48,10 @@ SEARCH_DIRS: list[Path] = [
 # Maps our internal model names to the canonical hailo_model_zoo name, the
 # ONNX source (for fallback compilation), and whether the model is required.
 MODEL_ZOO_INFO: dict[str, dict] = {
-    "yolo_det": {
-        "zoo_name": "yolov8s",
-        "onnx_source": "ultralytics",   # pip install ultralytics then export
-        "required": True,
-    },
-    "yolo_seg": {
-        "zoo_name": "yolov8n_seg",
-        "onnx_source": "ultralytics",
-        "required": False,
-    },
-    "fast_scnn": {
-        "zoo_name": "fast_scnn",
-        "onnx_source": None,            # no simple auto-export; manual only
-        "required": False,
-    },
-    "deeplab": {
-        "zoo_name": "deeplabv3_plus_mobilenet_v2",
-        "onnx_source": None,
-        "required": False,
-    },
+    "yolo_det":  {"zoo_name": "yolov8s",                        "required": True},
+    "yolo_seg":  {"zoo_name": "yolov8n_seg",                    "required": False},
+    "fast_scnn": {"zoo_name": "fast_scnn",                      "required": False},
+    "deeplab":   {"zoo_name": "deeplabv3_plus_mobilenet_v2",    "required": False},
 }
 
 # fast_depth is an ONNX model run on CPU via onnxruntime — not a Hailo HEF.
@@ -249,92 +232,6 @@ def _download_hailomz(zoo_name: str) -> Path | None:
     return None
 
 
-# ── Export ONNX from source ───────────────────────────────────────────────────
-def _export_onnx_ultralytics(zoo_name: str, onnx_path: Path) -> bool:
-    """Export an Ultralytics YOLOv8 model to ONNX."""
-    # Determine model variant from zoo name
-    pt_map = {
-        "yolov8s":     "yolov8s.pt",
-        "yolov8n_seg": "yolov8n-seg.pt",
-        "yolov8s_seg": "yolov8s-seg.pt",
-    }
-    pt_name = pt_map.get(zoo_name)
-    if not pt_name:
-        return False
-    _log(f"exporting {pt_name} → {onnx_path}")
-    script = (
-        f"from ultralytics import YOLO; import shutil\n"
-        f"m = YOLO('{pt_name}')\n"
-        f"out = m.export(format='onnx', imgsz=640)\n"
-        f"import pathlib; p = pathlib.Path(out)\n"
-        f"shutil.copy(str(p), '{onnx_path}')\n"
-    )
-    try:
-        r = subprocess.run([sys.executable, "-c", script],
-                           capture_output=True, text=True, timeout=300)
-        return r.returncode == 0 and onnx_path.exists()
-    except Exception as e:
-        _log(f"ONNX export failed: {e}")
-        return False
-
-
-# ── Compile ONNX → HEF ────────────────────────────────────────────────────────
-def _compile_onnx_to_hef(onnx_path: Path, model_name: str, expected_wh: tuple[int, int]) -> Path | None:
-    """
-    Compile an ONNX file to HEF using the Hailo Dataflow Compiler CLI.
-    Stages: parse → optimize (random calibration) → compile.
-    Returns HEF path on success, None on failure.
-    """
-    work_dir  = OUTPUT_DIR / "_compile_tmp"
-    work_dir.mkdir(parents=True, exist_ok=True)
-    har_path  = work_dir / f"{model_name}.har"
-    opt_path  = work_dir / f"{model_name}_optimized.har"
-    hef_path  = OUTPUT_DIR / f"{model_name}_{HW_ARCH}.hef"
-
-    steps = [
-        # 1. Parse ONNX → HAR
-        (["hailo", "parse", "onnx", str(onnx_path),
-          "--net-name", model_name,
-          "--hw-arch", HW_ARCH,
-          "--output-dir", str(work_dir)],
-         "parse"),
-
-        # 2. Optimize (quantise with random calibration — accuracy is secondary)
-        (["hailo", "optimize", str(har_path),
-          "--hw-arch", HW_ARCH,
-          "--use-random-calib-set",
-          "--output-dir", str(work_dir)],
-         "optimize"),
-
-        # 3. Compile → HEF
-        (["hailo", "compile", str(opt_path),
-          "--hw-arch", HW_ARCH,
-          "--output-dir", str(OUTPUT_DIR)],
-         "compile"),
-    ]
-
-    for cmd, stage in steps:
-        _log(f"compile [{stage}]: {' '.join(cmd)}")
-        try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=COMPILE_TIMEOUT)
-            if r.returncode != 0:
-                _log(f"compile [{stage}] failed (exit {r.returncode}): {r.stderr.strip()[:200]}")
-                return None
-            _log(f"compile [{stage}] OK")
-        except FileNotFoundError:
-            _log("hailo DFC CLI not found — cannot compile")
-            return None
-        except subprocess.TimeoutExpired:
-            _log(f"compile [{stage}] timed out after {COMPILE_TIMEOUT}s")
-            return None
-
-    # Find the output HEF (Hailo may name it differently)
-    candidates = list(OUTPUT_DIR.glob(f"*{model_name}*.hef"))
-    if candidates:
-        return candidates[0]
-    return hef_path if hef_path.exists() else None
-
-
 # ── Per-model resolution ──────────────────────────────────────────────────────
 def _resolve_model(name: str) -> tuple[Path | None, str]:
     """
@@ -366,25 +263,9 @@ def _resolve_model(name: str) -> tuple[Path | None, str]:
             return hef, f"downloaded + valid: {reason}"
         _log(f"{name}: downloaded file invalid ({reason})")
 
-    # ── Step 3: export ONNX then compile to HEF ──────────────────────────────
-    onnx_source = zoo_info.get("onnx_source")
-    if onnx_source == "ultralytics":
-        _log(f"{name}: trying ONNX export + HEF compilation (slow)")
-        _speak(f"Compiling {name} from ONNX. This may take 30 minutes.")
-        onnx_path = OUTPUT_DIR / f"{zoo_name}.onnx"
-        if _export_onnx_ultralytics(zoo_name, onnx_path):
-            hef = _compile_onnx_to_hef(onnx_path, zoo_name, expected_wh)
-            if hef:
-                ok, reason = _validate_hef(hef, expected_wh)
-                if ok:
-                    return hef, f"compiled + valid: {reason}"
-                _log(f"{name}: compiled HEF invalid ({reason})")
-        else:
-            _log(f"{name}: ONNX export failed (ultralytics not installed?)")
-    elif onnx_source is None:
-        _log(f"{name}: no auto-compile path — manual download required")
-
-    # ── Step 4: give up, print instructions ──────────────────────────────────
+    # ── Step 3: give up, print instructions ──────────────────────────────────
+    # (ONNX export + Hailo DFC compilation removed — DFC is x86-only and
+    #  cannot run on the Pi ARM. Compilation must be done on an x86 machine.)
     _log(
         f"{name}: COULD NOT RESOLVE. Manual fix:\n"
         f"  Option A — download from Hailo model zoo:\n"
