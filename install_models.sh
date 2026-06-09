@@ -108,13 +108,9 @@ mkdir -p "$MODEL_DIR"
 echo ""
 echo "── install_models: HEF downloads ───────────────────────────────────────"
 
-# Format: "internal_key|zoo_name|target_hef_filename"
-MODELS=(
-    "yolo_seg|yolov8n_seg|yolov8n_seg_h8l.hef"
-    "midas|midas_v2_1_small|midas_v2_1_small_h8l.hef"
-    "fast_scnn|fast_scnn|fast_scnn_h8l.hef"
-    "deeplab|deeplabv3_plus_mobilenet_v2|deeplabv3_plus_mobilenetv2_cityscapes_h8l.hef"
-)
+# No optional Hailo HEF models to download — yolo_det ships with the SDK
+# and is already present at /usr/share/hailo-models/yolov8s_h8l.hef.
+MODELS=()
 
 for entry in "${MODELS[@]}"; do
     IFS='|' read -r key zoo_name hef_file <<< "$entry"

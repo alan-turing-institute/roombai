@@ -1,22 +1,13 @@
 """
 vision.py — Multi-model vision pipeline for RoombaI.
 
-Models (Hailo AI Hat+ H8L unless noted CPU):
-  yolo_det   YOLOv8s detection        COCO 80-class boxes + distance
-  yolo_seg   YOLOv8n instance-seg     adds per-object pixel masks
-  fast_depth fast-depth (ONNX/CPU)    per-pixel metric depth, primary sensor
-  fast_scnn  Fast-SCNN segmentation   fast semantic labels (floor, obstacles)
-  deeplab    DeepLabV3+               higher-quality semantic labels (door if ADE20K)
-  opencv     OpenCV geometry  (CPU)   door pillar-gap detector, fused with depth
-  flow       Farneback flow   (CPU)   between-frame depth + stuck detection
+Models running on this Pi:
+  yolo_det   YOLOv8s detection  (Hailo AI Hat+ H8L)  COCO 80-class boxes + distance
+  fast_depth fast-depth ONNX    (CPU / onnxruntime)   per-pixel metric depth
+  opencv     OpenCV geometry    (CPU)                  door pillar-gap detector
+  flow       Farneback flow     (CPU)                  between-frame depth + stuck
 
 Main entry point: analyze_scene(img_bgr, prev_img, baseline_cm) → scene dict.
-
-Each model is optional. If its HEF file is missing or init fails the rest
-continue. Call init_all_models() once at startup; check MODELS_AVAILABLE.
-
-HEF file names must be verified against  ls /usr/share/hailo-models/  on the Pi.
-See github.com/hailo-ai/hailo_model_zoo (filter by h8l) for canonical names.
 """
 
 import math
@@ -49,55 +40,6 @@ MODEL_SPECS: dict[str, dict] = {
         "input_wh": (640, 640),
         "kind":     "yolo_det",
         "dataset":  "",
-    },
-    "yolo_seg": {
-        "hef":      _MDIR / "yolov8n_seg_h8l.hef",
-        "input_wh": (640, 640),
-        "kind":     "yolo_seg",
-        "dataset":  "",
-    },
-    "fast_scnn": {
-        # Cityscapes model has no 'door' class; useful for floor + obstacle masks.
-        # If an ADE20K-trained HEF is available, set dataset to "ade20k".
-        "hef":      _MDIR / "fast_scnn_h8l.hef",
-        "input_wh": (512, 512),   # verify on Pi — Hailo may compile at different res
-        "kind":     "segmentation",
-        "dataset":  "cityscapes",
-    },
-    "deeplab": {
-        "hef":      _MDIR / "deeplabv3_plus_mobilenetv2_cityscapes_h8l.hef",
-        "input_wh": (513, 513),   # verify on Pi
-        "kind":     "segmentation",
-        "dataset":  "cityscapes",
-    },
-}
-
-# ── Segmentation class indices per dataset ────────────────────────────────────
-# ADE20K has 'door' (idx 14) and 'floor' (idx 3) — ideal for indoor navigation.
-# Cityscapes has neither; 'road' (0) is the best floor proxy.
-# Update MODEL_SPECS["*"]["dataset"] when you know what the HEF was trained on.
-SEG_NAV: dict[str, dict[str, list[int]]] = {
-    "ade20k": {
-        "floor":    [3],
-        "wall":     [0],
-        "ceiling":  [5],
-        "window":   [8],
-        "door":     [14],
-        "obstacle": [0, 5, 7, 8, 10, 11, 14, 15, 18, 19, 20],
-    },
-    "cityscapes": {
-        "floor":    [0],           # road — closest indoor proxy
-        "wall":     [2, 3, 4],     # building, wall, fence
-        "door":     [],            # not in Cityscapes
-        "window":   [],
-        "obstacle": list(range(1, 19)),
-    },
-    "voc": {
-        "floor":    [],
-        "wall":     [],
-        "door":     [],
-        "window":   [],
-        "obstacle": list(range(1, 21)),
     },
 }
 
@@ -499,64 +441,15 @@ def _parse_fast_depth(depth_m: np.ndarray, orig_w: int, orig_h: int) -> np.ndarr
     return cv2.resize(inv.astype(np.float32), (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
 
 
-# ── Semantic segmentation parser ──────────────────────────────────────────────
-def _parse_segmentation(
-    raw: dict[str, np.ndarray],
-    orig_w: int,
-    orig_h: int,
-    dataset: str,
-) -> dict:
-    """
-    Parse Fast-SCNN or DeepLabV3+ output → class map + navigation masks.
-
-    Handles both argmax output [H,W] and logits [C,H,W] (takes argmax).
-    """
-    cls_nav = SEG_NAV.get(dataset, SEG_NAV["cityscapes"])
-    null = {"seg_map": None, "floor_mask": None, "door_mask": None, "obstacle_mask": None}
-
-    for arr in raw.values():
-        a = arr.squeeze()
-        if a.ndim == 3:
-            a = np.argmax(a, axis=0)     # [C,H,W] logits → [H,W]
-        if a.ndim != 2:
-            continue
-        seg = a.astype(np.uint8)
-        seg = cv2.resize(seg, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
-
-        def _mask(indices: list[int]) -> np.ndarray | None:
-            return np.isin(seg, indices) if indices else None
-
-        return {
-            "seg_map":       seg,
-            "floor_mask":    _mask(cls_nav["floor"]),
-            "door_mask":     _mask(cls_nav["door"]),
-            "obstacle_mask": _mask(cls_nav["obstacle"]),
-        }
-    return null
-
-
 # ── Open-space analysis from depth map ───────────────────────────────────────
-def _open_space_from_depth(
-    depth_map: np.ndarray,
-    floor_mask: np.ndarray | None = None,
-) -> dict:
+def _open_space_from_depth(depth_map: np.ndarray) -> dict:
     """
     Fraction of far pixels (potential open space / doorway) in each frame third.
-
-    Uses the bottom 40-percentile of inverse depth as the 'far' threshold —
-    i.e., pixels that are further away than 60 % of the scene.
-    If floor_mask is available, restricts to floor pixels to avoid counting
-    open ceiling/sky as navigable space.
-
     Returns {"left": float, "center": float, "right": float} in [0, 1].
     """
-    h, w     = depth_map.shape[:2]
     threshold = float(np.percentile(depth_map, 40))   # low inv-depth = far
-    far       = depth_map <= threshold
-
-    if floor_mask is not None and floor_mask.shape == depth_map.shape:
-        far = far & floor_mask
-
+    far   = depth_map <= threshold
+    w     = depth_map.shape[1]
     third = w // 3
     return {
         "left":   float(far[:, :third].mean()),
@@ -617,7 +510,6 @@ def detect_door_cv(
     img_bgr: np.ndarray,
     scene_depth_cm: float | None = None,
     depth_map: np.ndarray | None = None,
-    door_seg_mask: np.ndarray | None = None,
 ) -> dict:
     """
     Detect a doorway via near-vertical pillar pairs with a wide bright gap.
@@ -741,18 +633,10 @@ def detect_door_cv(
         door_dist  = round(scene_depth_cm, 1) if gap_real_cm is not None and scene_depth_cm else \
                      round(DOOR_WIDTH_CM * FOCAL_PX / gap, 1) if gap > 0 else None
 
-        # Segmentation boost: door pixels in the gap region raise confidence
-        seg_boost = 0.0
-        if door_seg_mask is not None:
-            gap_seg = door_seg_mask[:, lx:rx]
-            if gap_seg.size > 0:
-                seg_boost = min(0.3, float(gap_seg.mean()) * 0.3)
-
-        confidence = min(1.0, best_score / 500.0 + seg_boost)
+        confidence = min(1.0, best_score / 500.0)
         notes = (
             f"gap={gap}px dist≈{door_dist}cm real_w≈{gap_real_cm}cm pos={pos} "
             f"bright={bright_r:.2f} edge={edge_dens:.2f}"
-            + (f" seg+{seg_boost:.2f}" if seg_boost else "")
         )
         return {
             "door_visible":     True,
@@ -776,15 +660,12 @@ def analyze_scene(
     baseline_cm: float = 0.0,
 ) -> dict:
     """
-    Run every available model on img_bgr and return a fused scene dict.
+    Run all available models on img_bgr and return a fused scene dict.
 
     Keys:
       detections      list[dict]        YOLO objects: class, bbox, distance_cm,
                                         real_height_cm, position
       depth_map       ndarray|None      H×W float32, 0=far / 1=close  (fast_depth)
-      seg_map         ndarray|None      H×W uint8 class indices (best seg model)
-      floor_mask      ndarray|None      H×W bool
-      door_seg_mask   ndarray|None      H×W bool  ('door' class from seg, if available)
       door            dict              fused door detection (same fields as detect_door_cv)
       obstacles       dict              blocked / clear_path / nearest_cm / obstacles[]
       open_space      dict              left/center/right far-pixel fractions from depth
@@ -819,56 +700,24 @@ def analyze_scene(
         detections = _parse_yolo_boxes(raw, orig_w, orig_h, depth_map, scene_depth_cm,
                                        flow_field, baseline_cm)
 
-    # 4. YOLOv8-seg — use if detection unavailable or as additional mask data
-    raw = _hailo_infer("yolo_seg", img_bgr)
-    if raw is not None and not detections:
-        detections = _parse_yolo_boxes(raw, orig_w, orig_h, depth_map, scene_depth_cm,
-                                       flow_field, baseline_cm)
-
-    # 5. Semantic segmentation — prefer DeepLabV3+ over Fast-SCNN (higher quality)
-    seg_map:       np.ndarray | None = None
-    floor_mask:    np.ndarray | None = None
-    door_seg_mask: np.ndarray | None = None
-    for seg_name in ("deeplab", "fast_scnn"):
-        m = _hailo_reg.get(seg_name)
-        if m is None:
-            continue
-        raw = _hailo_infer(seg_name, img_bgr)
-        if raw is None:
-            continue
-        seg_out = _parse_segmentation(raw, orig_w, orig_h, m.get("dataset", "cityscapes"))
-        if seg_out["seg_map"] is not None:
-            seg_map       = seg_out["seg_map"]
-            floor_mask    = seg_out["floor_mask"]
-            door_seg_mask = seg_out["door_mask"]
-            break
-
-    # 6. Obstacle map (uses flow depth + depth map for accurate distances)
+    # 4. Obstacle map
     obstacles = analyze_obstacles(
         detections, orig_w, orig_h, scene_depth_cm, flow_field, baseline_cm
     )
 
-    # 7. Open-space map from depth (which direction has open corridor/door)
+    # 5. Open-space map from depth
     open_space = (
-        _open_space_from_depth(depth_map, floor_mask)
+        _open_space_from_depth(depth_map)
         if depth_map is not None
         else {"left": 0.0, "center": 0.0, "right": 0.0}
     )
 
-    # 8. Door detection — fuses geometry, depth, segmentation
-    door = detect_door_cv(
-        img_bgr,
-        scene_depth_cm=scene_depth_cm,
-        depth_map=depth_map,
-        door_seg_mask=door_seg_mask,
-    )
+    # 6. Door detection — fuses geometry and depth
+    door = detect_door_cv(img_bgr, scene_depth_cm=scene_depth_cm, depth_map=depth_map)
 
     return {
         "detections":     detections,
         "depth_map":      depth_map,
-        "seg_map":        seg_map,
-        "floor_mask":     floor_mask,
-        "door_seg_mask":  door_seg_mask,
         "door":           door,
         "obstacles":      obstacles,
         "open_space":     open_space,

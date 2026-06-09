@@ -426,11 +426,6 @@ def camera_thread():
             )
         state_set(open_space=scene["open_space"])
 
-        # ── Segmentation ─────────────────────────────────────────────────
-        if scene["seg_map"] is not None:
-            door_px = int(scene["door_seg_mask"].sum()) if scene["door_seg_mask"] is not None else 0
-            log(f"[SEG] frame {frame_num}: door_pixels={door_px}")
-
         # ── YOLO detections ───────────────────────────────────────────────
         detections = scene["detections"]
         obs_map    = scene["obstacles"]

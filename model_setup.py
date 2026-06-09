@@ -48,10 +48,7 @@ SEARCH_DIRS: list[Path] = [
 # Maps our internal model names to the canonical hailo_model_zoo name, the
 # ONNX source (for fallback compilation), and whether the model is required.
 MODEL_ZOO_INFO: dict[str, dict] = {
-    "yolo_det":  {"zoo_name": "yolov8s",                        "required": True},
-    "yolo_seg":  {"zoo_name": "yolov8n_seg",                    "required": False},
-    "fast_scnn": {"zoo_name": "fast_scnn",                      "required": False},
-    "deeplab":   {"zoo_name": "deeplabv3_plus_mobilenet_v2",    "required": False},
+    "yolo_det": {"zoo_name": "yolov8s", "required": True},
 }
 
 # fast_depth is an ONNX model run on CPU via onnxruntime — not a Hailo HEF.
