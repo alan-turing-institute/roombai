@@ -10,15 +10,12 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 STATE_FILE="/tmp/run_state.env"
 
-shopt -s nullglob
-existing_attempts=(/tmp/escape_attempt_*)
-ATTEMPT_N=$(( ${#existing_attempts[@]} + 1 ))
-ATTEMPT_DIR="/tmp/escape_attempt_${ATTEMPT_N}"
-mkdir -p "${ATTEMPT_DIR}/frames"
-
 PILOT_NAME=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)
 COMMIT_HASH=$(git -C "$REPO_ROOT" rev-parse --short HEAD)
 START_TIME=$(date +%s)
+
+ATTEMPT_DIR="/tmp/escape_attempt_${COMMIT_HASH}"
+mkdir -p "${ATTEMPT_DIR}/frames"
 
 cat > "$STATE_FILE" <<EOF
 ATTEMPT_DIR=${ATTEMPT_DIR}

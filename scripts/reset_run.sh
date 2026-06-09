@@ -23,7 +23,6 @@ else
     echo "  Claude project memory dir not found — skipping ($CLAUDE_PROJECT_DIR)"
 fi
 
-<<<<<<< HEAD
 # 2. Clear RoombaI run artifacts from /tmp (leave system sockets/dirs alone)
 rm -rf /tmp/escape_attempt_* \
        /tmp/run_state.env \
@@ -33,11 +32,6 @@ rm -rf /tmp/escape_attempt_* \
        /tmp/execution_log.txt \
        /tmp/frame_*.jpg
 echo "✓ Cleared RoombaI run artifacts from /tmp"
-=======
-# 2. Clear everything in /tmp (depth-first so dirs are emptied before deletion)
-find /tmp -mindepth 1 -depth -delete 2>/dev/null || true
-echo "✓ Cleared /tmp"
->>>>>>> 6dfcb022e2b6b842b1d5f10be6efe20f007695b0
 
 echo ""
 echo "Reset complete."
