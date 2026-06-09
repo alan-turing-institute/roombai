@@ -40,7 +40,12 @@ ssh -t <pi_host> "bash /home/hackweek26/roombai/run.sh $ARGUMENTS"
 The `-t` flag allocates a pseudo-TTY so Ctrl-C propagates correctly.
 
 `run.sh` performs in order:
-  a. **Vision model pre-flight** — calls `model_setup.ensure_models()`.
+  a. **Model installer** — runs `install_models.sh`, which installs
+     `hailo-model-zoo` and `ultralytics` pip packages if missing, then
+     downloads any absent HEF files (yolo_seg, midas, fast_scnn, deeplab)
+     via `hailomz download`. Skips anything already present so repeated
+     runs are fast. Failures are warnings, not fatal.
+  b. **Vision model pre-flight** — calls `model_setup.ensure_models()`.
      For each of the five Hailo models (yolo_det, yolo_seg, midas,
      fast_scnn, deeplab) it: checks the HEF file exists and is valid,
      downloads it via the Hailo model-zoo CLI if missing, and falls back

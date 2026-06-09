@@ -5,7 +5,8 @@
 #   --greet   Enable human greeting mode (80 % / 20 % phrase split)
 #
 # What it does:
-#   1. Pre-flight vision-model check   (download / compile any missing HEFs)
+#   0. Install model tools + download missing HEFs  (install_models.sh)
+#   1. Pre-flight vision-model check   (ensure_models() in model_setup.py)
 #   2. Start pilot daemon              (serial ↔ TCP bridge, if not already up)
 #   3. Start TTS daemon                (espeak-ng speaker, if not already up)
 #   4. Run explore.py                  (blocks until the run ends)
@@ -44,8 +45,12 @@ step() { echo ""; echo "── $* ───────────────�
 ok()   { echo "  ✓ $*"; }
 fail() { echo "  ✗ $*" >&2; exit 1; }
 
+# ── Step 0: Install tools + download missing HEF files ───────────────────────
+step "Step 0 — Model installer (hailo-model-zoo tools + missing HEFs)"
+bash "$REPO_DIR/install_models.sh"
+
 # ── Step 1: Vision model check ────────────────────────────────────────────────
-step "Step 1 — Vision model check (download / compile missing HEFs)"
+step "Step 1 — Vision model check (validate all HEFs via Hailo SDK)"
 cd "$REPO_DIR"
 python3 - <<'PYEOF'
 import sys
