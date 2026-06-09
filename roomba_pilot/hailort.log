@@ -1,3 +1,0 @@
-[2026-06-08 14:31:32.909] [17099] [HailoRT] [info] [device.cpp:51] [Device] OS Version: Linux 6.18.33+rpt-rpi-2712 #1 SMP PREEMPT Debian 1:6.18.33-1+rpt1 (2026-06-01) aarch64
-[2026-06-08 14:31:32.910] [17099] [HailoRT] [info] [control.cpp:113] [control__parse_identify_results] firmware_version is: 4.23.0
-[2026-06-08 14:31:32.912] [17099] [HailoRT] [info] [control.cpp:113] [control__parse_identify_results] firmware_version is: 4.23.0
