@@ -16,8 +16,13 @@ flowchart LR
 cargo run -p simulator
 ```
 
-- Optional speed multiplier (1‑100×)
+- Optional speed multiplier (1‑100×) – speeds up the **simulation clock** and also scales movement speeds.
+- The multiplier scales the internal time step *and* multiplies the base move speed (`MOVE_SPEED_CM_S`) by the factor, so commands such as `move`, `turn`, and `go` complete proportionally faster while preserving distances and angles.
+- It also scales the speed of simulated humans; their base speed values are multiplied by the same factor.
 - Provide a number after `--` to set the simulation speed, e.g.:
+```bash
+cargo run -p simulator -- 25   # runs at 25× speed (real‑time seconds are compressed)
+```
 
 ```bash
 cargo run -p simulator -- 25   # runs at 25× speed

@@ -9,7 +9,7 @@ use std::env;
 mod map_data;
 
 const WHEEL_SPAN_MM: f32 = 235.0;
-const MOVE_SPEED_CM_S: f64 = 20.0;
+const BASE_MOVE_SPEED_CM_S: f64 = 20.0;
 const TURN_RATE_DEG_S: f64 = 60.0;
 const CONTINUOUS_MAX: Duration = Duration::from_secs(3);
 const TRAIL_LEN: usize = 400;
@@ -955,13 +955,14 @@ fn dispatch(line: &str, state: &Arc<Mutex<RobotState>>) -> String {
                 return "ERR usage: move <cm>".into();
             }
             let dist: f64 = num!(rest[0], f64);
+            let mut s = state.lock().unwrap();
+            let base_speed = BASE_MOVE_SPEED_CM_S;
             let speed = if dist < 0.0 {
-                -MOVE_SPEED_CM_S
+                -(base_speed * s.speed as f64)
             } else {
-                MOVE_SPEED_CM_S
+                base_speed * s.speed as f64
             };
             let secs = (dist / speed).abs();
-            let mut s = state.lock().unwrap();
             s.vel = (speed * 10.0) as f32;
             s.angular = 0.0;
             s.arm(Duration::from_secs_f64(secs));
@@ -1166,9 +1167,7 @@ async fn main() {
 
         // Speed toggle: S key switches between 1× and 10×
         // Speed toggle via key disabled; speed set via CLI argument only
-
-        // 1. Human-Reactive Door Updates (doors open when a human is near, close immediately with 50% probability when they leave)
-        for (idx, door) in doors.iter_mut().enumerate() {
+for (idx, door) in doors.iter_mut().enumerate() {
             let mut any_human_near = false;
             for human in &humans {
                 if dist_to_segment(human.pos, door.p1, door.p2) < 1200.0 {
@@ -1259,7 +1258,7 @@ async fn main() {
                         };
                         // Update heading
                         human.heading = new_dir.to_angle();
-                        let candidate_pos = human.pos + new_dir * human.speed * step;
+                        let candidate_pos = human.pos + new_dir * (human.speed * s.speed as f32) * step;
                         let resolved_pos = resolve_pos_collisions_with_map(candidate_pos, HUMAN_RADIUS_MM, &walls, &doors);
                         if !is_inside_building_bounds(resolved_pos) {
                             // Blocked or going out of bounds, choose a new target and replan
