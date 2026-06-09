@@ -184,7 +184,7 @@ cat /tmp/roomba_state.json
 {
   "mode": "APPROACH",
   "door_bearing": 135.0,
-  "notes": "rounded column + card reader door spotted at 135 degrees"
+  "notes": "glass wall door spotted at 135 degrees"
 }
 ```
 

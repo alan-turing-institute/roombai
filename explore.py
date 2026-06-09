@@ -23,9 +23,11 @@ STRATEGY FILE  /tmp/roomba_strategy.json
   }
 """
 
+import argparse
 import json
 import math
 import queue
+import random
 import shutil
 import socket
 import subprocess
@@ -38,13 +40,12 @@ import cv2
 import numpy as np
 
 from map_maker import MapRecorder
+from model_setup import ensure_models
 from vision import (
     OdometryTracker,
-    analyze_motion,
-    analyze_obstacles,
-    detect_door_cv,
-    init_hailo,
-    run_yolo,
+    MODELS_AVAILABLE,
+    analyze_scene,
+    init_all_models,
     yolo_labels,
 )
 
@@ -61,6 +62,7 @@ FRAME_INTERVAL  = 2.0   # seconds between camera captures
 MOVE_SPEED      = 35    # cm/s forward speed
 MOVE_BURST      = 3.0   # seconds per forward burst
 TURN_AFTER_BUMP = 90    # degrees to turn after bumping (always CW)
+SCAN_ROCK_CM    = 20    # forward distance (cm) rocked at each scan heading for flow depth
 
 DOOR_CONFIRM_FRAMES = 3
 DOOR_CONFIRM_MIN_CONF = 0.10   # ignore detections below this confidence
@@ -89,11 +91,40 @@ _state: dict = {
     "blocked":         {"left": False, "center": False, "right": False},
     "clear_path":      None,   # "left" | "center" | "right" | None
     "nearest_cm":      None,   # distance to nearest blocking obstacle
+    "open_space":      {"left": 0.0, "center": 0.0, "right": 0.0},  # depth-map far fractions
     "log_lines":       0,
 }
 
 odom         = OdometryTracker()
 map_recorder = MapRecorder()
+
+# ── Human greeting ────────────────────────────────────────────────────────────
+_greet_humans     = False          # set to True by --greet flag
+_GREET_PHRASES    = [
+    ("Hello human, I come in peace",    0.80),
+    ("Human you are, seek peace we must", 0.20),
+]
+_GREET_COOLDOWN_S = 30.0           # minimum seconds between greetings
+_last_greeted_at  = 0.0            # monotonic timestamp of last greeting
+
+
+def _maybe_greet():
+    """Speak a greeting if --greet is active and the cooldown has elapsed."""
+    global _last_greeted_at
+    if not _greet_humans:
+        return
+    now = time.monotonic()
+    if now - _last_greeted_at < _GREET_COOLDOWN_S:
+        return
+    _last_greeted_at = now
+    # Weighted random choice (80 / 20)
+    phrase = random.choices(
+        [p for p, _ in _GREET_PHRASES],
+        weights=[w for _, w in _GREET_PHRASES],
+        k=1,
+    )[0]
+    log(f"[GREET] {phrase}")
+    speak(phrase)
 
 
 def state_get(key):
@@ -198,7 +229,7 @@ def _read_strategy():
 def camera_thread():
     frame_num          = 0
     door_confirm_count = 0
-    prev_img: np.ndarray | None = None
+    prev_img:  np.ndarray | None              = None
     prev_odom: tuple[float, float, float] | None = None
 
     while state_get("mode") != "STOP":
@@ -224,33 +255,51 @@ def camera_thread():
             continue
 
         curr_odom = odom.snapshot()
-        frame_h, frame_w = curr_img.shape[:2]
 
-        # ── Optical-flow depth / stuck detection ─────────────────────────
-        scene_depth: float | None = None
-        if prev_img is not None and prev_odom is not None:
-            dx = curr_odom[0] - prev_odom[0]
-            dy = curr_odom[1] - prev_odom[1]
-            baseline_cm = math.hypot(dx, dy)
-            motion      = analyze_motion(prev_img, curr_img, baseline_cm)
-            scene_depth = motion.get("scene_depth_cm")
-            stuck       = motion.get("stuck", False)
-            flow        = motion.get("flow_px", 0.0)
-            state_set(scene_depth_cm=scene_depth, stuck=stuck)
-            log(
-                f"[FLOW] frame {frame_num}: baseline={baseline_cm:.1f}cm "
-                f"flow={flow:.1f}px depth≈{scene_depth}cm stuck={stuck}"
+        # Odometry baseline for optical flow depth
+        baseline_cm = 0.0
+        if prev_odom is not None:
+            baseline_cm = math.hypot(
+                curr_odom[0] - prev_odom[0],
+                curr_odom[1] - prev_odom[1],
             )
-            if stuck and state_get("mode") in ("EXPLORE", "APPROACH"):
-                speak("Robot appears stuck. Changing direction.")
+
+        # ── Run all vision models (YOLO-det, YOLO-seg, MiDaS, Fast-SCNN, DeepLabV3+,
+        #    optical flow, OpenCV door detection) and fuse into one scene dict ──
+        scene = analyze_scene(curr_img, prev_img=prev_img, baseline_cm=baseline_cm)
 
         prev_img  = curr_img
         prev_odom = curr_odom
 
-        # ── YOLO obstacle detection ───────────────────────────────────────
-        detections = run_yolo(curr_img)
-        obs_map    = analyze_obstacles(detections, frame_w, frame_h, scene_depth)
+        # ── Optical flow / stuck ──────────────────────────────────────────
+        scene_depth = scene["scene_depth_cm"]
+        stuck       = scene["stuck"]
+        state_set(scene_depth_cm=scene_depth, stuck=stuck)
+        if baseline_cm > 0:
+            log(
+                f"[FLOW] frame {frame_num}: baseline={baseline_cm:.1f}cm "
+                f"depth≈{scene_depth}cm stuck={stuck}"
+            )
+            if stuck and state_get("mode") in ("EXPLORE", "APPROACH"):
+                speak("Robot appears stuck. Changing direction.")
 
+        # ── Depth map (MiDaS) ────────────────────────────────────────────
+        if scene["depth_map"] is not None:
+            os_ = scene["open_space"]
+            log(
+                f"[DEPTH] frame {frame_num}: open_space "
+                f"L={os_['left']:.2f} C={os_['center']:.2f} R={os_['right']:.2f}"
+            )
+        state_set(open_space=scene["open_space"])
+
+        # ── Segmentation ─────────────────────────────────────────────────
+        if scene["seg_map"] is not None:
+            door_px = int(scene["door_seg_mask"].sum()) if scene["door_seg_mask"] is not None else 0
+            log(f"[SEG] frame {frame_num}: door_pixels={door_px}")
+
+        # ── YOLO detections ───────────────────────────────────────────────
+        detections = scene["detections"]
+        obs_map    = scene["obstacles"]
         state_set(
             last_detection=detections,
             blocked=obs_map["blocked"],
@@ -259,10 +308,11 @@ def camera_thread():
         )
 
         if detections:
-            labels    = yolo_labels(detections)
-            blocking  = [d for d in obs_map["obstacles"] if d["blocking"]]
+            labels   = yolo_labels(detections)
+            blocking = [d for d in obs_map["obstacles"] if d["blocking"]]
             block_str = ", ".join(
                 f"{d['class_name']}@{d['position']}~{d['distance_cm']}cm"
+                f"(h≈{d.get('real_height_cm')}cm)"
                 for d in blocking
             ) or "none"
             log(
@@ -273,19 +323,16 @@ def camera_thread():
             if "person" in labels:
                 log("[YOLO] person visible — door may open soon")
                 speak("Person detected. Watching for door.")
+                _maybe_greet()
 
-            # Record blocking obstacles on the map
             rx, ry, rh = odom.x, odom.y, odom.heading
             for det in blocking:
-                map_recorder.record_yolo(
-                    rx, ry, rh,
-                    det["class_name"],
-                    det["position"],
-                    det.get("distance_cm"),
-                )
+                map_recorder.record_yolo(rx, ry, rh,
+                                         det["class_name"], det["position"],
+                                         det.get("distance_cm"))
 
-        # ── Door detection ────────────────────────────────────────────────
-        door = detect_door_cv(curr_img)
+        # ── Door detection (fused) ────────────────────────────────────────
+        door = scene["door"]
         state_set(last_door=door)
 
         if door["door_visible"] and door.get("confidence", 0) >= DOOR_CONFIRM_MIN_CONF:
@@ -316,26 +363,18 @@ def camera_thread():
                     door_confirm_count = 0
 
             elif door["door_open"] and mode == "APPROACH":
-                # Correct bearing while approaching based on where the door sits in frame
                 pos    = door.get("door_position", "center")
                 offset = {"left": 25, "center": 0, "right": -25}.get(pos, 0)
                 if abs(offset) > 0:
                     new_bearing = (odom.heading + offset) % 360
-                    log(
-                        f"[VISION] APPROACH: door on {pos}, correcting bearing "
-                        f"→ {new_bearing:.0f}°"
-                    )
+                    log(f"[VISION] APPROACH: door on {pos}, correcting → {new_bearing:.0f}°")
                     state_set(door_bearing=new_bearing)
 
             elif door["door_open"] and mode not in ("APPROACH", "STOP", "WAIT"):
                 pos     = door.get("door_position", "center")
-                heading = odom.heading
                 offset  = {"left": 30, "center": 0, "right": -30}.get(pos, 0)
-                bearing = (heading + offset) % 360
-                log(
-                    f"[VISION] Open door on {pos} at ≈{dist:.0f}cm "
-                    f"→ APPROACH bearing={bearing:.0f}°"
-                )
+                bearing = (odom.heading + offset) % 360
+                log(f"[VISION] Open door on {pos} at ≈{dist:.0f}cm → APPROACH bearing={bearing:.0f}°")
                 speak(f"Door on the {pos}, about {int(dist)} centimetres. Approaching.")
                 state_set(mode="APPROACH", door_bearing=bearing)
                 door_confirm_count = 0
@@ -354,20 +393,48 @@ def mover_thread():
     _consecutive_stuck = 0
     _bumps_since_scan  = 0
 
-    def do_forward(speed: int, secs: float) -> str:
-        r = send_cmd(f"forward {speed} {secs:.1f}")
-        odom.forward(speed, secs)
-        state_set(pos_x=odom.x, pos_y=odom.y)
-        time.sleep(secs + 0.1)
-        map_recorder.record_position(odom.x, odom.y, odom.heading)
-        return r
+    _FORWARD_SEG_S = 0.3   # seconds per forward segment for bump-interruptible driving
 
-    def do_back(speed: int = MOVE_SPEED, secs: float = 0.8) -> str:
-        r = send_cmd(f"back {speed} {secs:.1f}")
-        odom.forward(-speed, secs)
+    def do_forward(speed: int, secs: float) -> tuple[str, float]:
+        """
+        Drive forward in 0.3-second segments, stopping the instant a bumper fires.
+
+        Odometry is updated only for segments that completed without a bump.
+        The segment during which the bump occurred is NOT counted — the robot
+        was physically stopped by the obstacle part-way through it, so the
+        commanded distance for that segment is unreliable.
+
+        Returns (status, actual_secs_traveled).
+          status: "ok" | "bump_L" | "bump_R" | "bump_LR"
+        """
+        elapsed = 0.0
+        bump_side = ""
+        while elapsed < secs:
+            if state_get("mode") == "STOP":
+                break
+            seg = min(_FORWARD_SEG_S, secs - elapsed)
+            send_cmd(f"forward {speed} {seg:.2f}")
+            time.sleep(seg + 0.05)
+
+            r = send_cmd("bumps")
+            bl, br = "bumpL=1" in r, "bumpR=1" in r
+            if bl or br:
+                send_cmd("stop")
+                # Do NOT count this segment — distance during a bump is unknown.
+                # Odometry already reflects all prior clean segments.
+                bump_side = ("LR" if bl and br else "L" if bl else "R")
+                log(f"[MOVER] bumper {bump_side} after {elapsed:.1f}s "
+                    f"(~{elapsed*speed:.0f} cm)")
+                map_recorder.record_bump(odom.x, odom.y, odom.heading)
+                state_set(pos_x=odom.x, pos_y=odom.y)
+                return f"bump_{bump_side}", elapsed
+            # Segment clean — commit to odometry
+            odom.forward(speed, seg)
+            elapsed += seg
+
         state_set(pos_x=odom.x, pos_y=odom.y)
-        time.sleep(secs + 0.1)
-        return r
+        map_recorder.record_position(odom.x, odom.y, odom.heading)
+        return "ok", elapsed
 
     def do_turn(deg: float):
         send_cmd(f"turn {deg:.0f}")
@@ -375,32 +442,106 @@ def mover_thread():
         state_set(heading=odom.heading)
         time.sleep(abs(deg) / 60.0 + 0.3)
 
-    def bumped() -> tuple[bool, bool]:
-        r = send_cmd("bumps")
-        return "bumpL=1" in r, "bumpR=1" in r
+    def do_reverse_safe(dist_cm: float, skip_check: bool = False) -> bool:
+        """
+        Move 'backward' safely — sensors always face the direction of travel.
+
+        Procedure:
+          1. Rotate 180° to face the target direction.
+          2. Unless skip_check=True, wait for a camera frame and verify the
+             path is clear (nearest obstacle > dist_cm + 20 cm).
+          3. Drive forward dist_cm using interruptible do_forward().
+          4. Rotate 180° back to restore original heading.
+
+        skip_check=True is appropriate when we know the path is clear
+        (e.g. post-bump retreat — we were just in that space) and speed
+        matters more than the extra safety wait.
+
+        Returns True if the forward leg completed without a bump.
+        """
+        do_turn(180)
+
+        if not skip_check:
+            time.sleep(2.2)   # let camera capture at new heading
+            nearest  = state_get("nearest_cm") or 9999
+            blocked_c = (state_get("blocked") or {}).get("center", False)
+            if blocked_c and nearest < dist_cm + 20:
+                log(f"[MOVER] reverse path blocked ({nearest:.0f} cm) — skipping back-move")
+                speak("Reverse path blocked. Staying put.")
+                do_turn(180)  # restore heading
+                return False
+
+        status, _ = do_forward(MOVE_SPEED, dist_cm / MOVE_SPEED)
+        do_turn(180)   # restore original heading
+        return status == "ok"
 
     def do_scan_360():
-        """Stop and rotate 360° in 8 steps, pausing at each heading for the camera."""
-        log("[MOVER] SCAN: rotating 360° to look for door")
-        speak("Pausing to scan for door.")
+        """
+        360° depth scan: 8 × 45° steps with a ±SCAN_ROCK_CM forward rock.
+
+        At each heading:
+          Frame A  — stationary at position X, heading H
+          (robot moves forward SCAN_ROCK_CM to X+20 cm)
+          Frame B  — stationary at X+20 cm, heading H
+            → optical flow A→B  baseline = 20 cm  → depth at heading H  ✓
+          (robot rotates 180° and waits for camera)
+          Frame C  — stationary at X+20 cm, heading H+180°
+            → used as obstacle check before returning; flow B→C is a pure
+               rotation so contributes no translational depth
+          (robot drives forward SCAN_ROCK_CM to return to X)
+          Frame D  — stationary at X, heading H+180°
+            → optical flow C→D  baseline = 20 cm  → depth at heading H+180° ✓
+          (robot rotates 180° back to heading H, ready for next –45° turn)
+
+        The return leg uses do_reverse_safe() so the camera always faces the
+        direction of travel before moving.
+        """
+        log(f"[MOVER] SCAN: 360° depth scan (±{SCAN_ROCK_CM} cm rock per heading)")
+        speak("Pausing for depth scan.")
+        rock_cm   = SCAN_ROCK_CM
+        rock_secs = rock_cm / MOVE_SPEED
+
         for _ in range(8):
             if state_get("mode") in ("APPROACH", "STOP"):
                 break
+
             do_turn(-45)
-            time.sleep(2.2)   # camera captures every 2s; give it a frame at each heading
+            time.sleep(2.2)                        # frame A: heading H, position X
+
+            do_forward(MOVE_SPEED, rock_secs)      # move to X + SCAN_ROCK_CM
+            time.sleep(2.2)                        # frame B: flow A→B gives depth at H
+
+            # Return using safe reverse (rotate, check, forward, rotate back).
+            # skip_check=False so frame C provides a real obstacle check before
+            # we commit to the return move.
+            do_reverse_safe(rock_cm, skip_check=False)
+            # After do_reverse_safe: position ≈ X, heading H
+            # Frame D was captured during the return forward leg (flow C→D, heading H+180°)
 
     def choose_avoid_turn() -> float:
         """
-        Decide which direction to steer based on which thirds are clear.
+        Steering direction: fuse YOLO blocked map with MiDaS open-space fractions.
         Returns degrees to turn (+CCW, −CW).
         """
-        blocked    = state_get("blocked") or {}
-        clear_path = state_get("clear_path")
-        if clear_path == "right":
-            return -40.0   # CW toward right
-        if clear_path == "left":
-            return 40.0    # CCW toward left
-        # All thirds blocked — turn 90° CW (consistent with wall-following)
+        blocked     = state_get("blocked") or {}
+        clear_path  = state_get("clear_path")
+        open_space  = state_get("open_space") or {}
+
+        # If YOLO says a path is clear, use it
+        if clear_path == "right" and not blocked.get("right"):
+            return -40.0
+        if clear_path == "left" and not blocked.get("left"):
+            return 40.0
+
+        # Fall back to depth-map open-space fractions
+        ol = open_space.get("left", 0.0)
+        or_ = open_space.get("right", 0.0)
+        if ol > or_ + 0.05:
+            return 40.0    # left is more open
+        if or_ > ol + 0.05:
+            return -40.0   # right is more open
+
+        # No clear preference — turn 90° CW (wall-following default)
         return -90.0
 
     speak("Beginning room exploration.")
@@ -431,8 +572,8 @@ def mover_thread():
         # ── Stuck recovery ────────────────────────────────────────────────
         if state_get("stuck"):
             _consecutive_stuck += 1
-            log(f"[MOVER] stuck ({_consecutive_stuck}) — backing + large turn")
-            do_back(MOVE_SPEED, 1.2)
+            log(f"[MOVER] stuck ({_consecutive_stuck}) — reversing + large turn")
+            do_reverse_safe(42, skip_check=False)   # check carefully when truly stuck
             do_turn(-120 if _consecutive_stuck % 2 == 0 else 120)
             state_set(stuck=False)
             if _consecutive_stuck >= 3:
@@ -477,14 +618,14 @@ def mover_thread():
                 speak(f"Obstacle ahead. Steering around.")
                 do_turn(deg)
 
-            do_forward(speed, burst)
-            bl, br = bumped()
-            if bl or br:
+            status, _ = do_forward(speed, burst)
+            if status.startswith("bump"):
+                bump_R = "R" in status
                 _approach_bumps += 1
-                log(f"[MOVER] APPROACH: bump ({_approach_bumps}/5)")
-                map_recorder.record_bump(odom.x, odom.y, odom.heading)
-                do_back(MOVE_SPEED, 0.8)
-                do_turn(45 if br else -45)
+                log(f"[MOVER] APPROACH: bump_{status[5:]} ({_approach_bumps}/5)")
+                # Back off safely (path is implicitly clear — we came from there)
+                do_reverse_safe(28, skip_check=True)
+                do_turn(45 if bump_R else -45)
                 if _approach_bumps >= 5:
                     log("[MOVER] APPROACH: too many bumps — EXPLORE")
                     speak("Too many bumps. Reassessing.")
@@ -518,16 +659,15 @@ def mover_thread():
                 # Obstacle visible but far enough — just log it
                 log(f"[MOVER] obstacle in center but distant (≈{nearest_cm}cm) — continuing")
 
-            do_forward(MOVE_SPEED, MOVE_BURST)
+            status, _ = do_forward(MOVE_SPEED, MOVE_BURST)
 
-            bl, br = bumped()
-            if bl or br:
-                side = "left" if bl else "right"
+            if status.startswith("bump"):
+                side = "right" if "R" in status else "left"
                 log(f"[MOVER] bump {side} at heading={odom.heading:.0f}°")
                 speak("Bump. Turning right.")
                 state_set(bumps=state_get("bumps") + 1)
-                map_recorder.record_bump(odom.x, odom.y, odom.heading)
-                do_back(MOVE_SPEED, 0.5)
+                # Back off safely — path behind is clear (we just came from there)
+                do_reverse_safe(17.5, skip_check=True)
                 do_turn(-TURN_AFTER_BUMP)   # always CW for consistent wall-following
                 _bumps_since_scan += 1
                 if _bumps_since_scan >= SCAN_EVERY_BUMPS:
@@ -549,14 +689,31 @@ def state_writer_thread():
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 def main():
+    global _greet_humans
+    parser = argparse.ArgumentParser(description="RoombaI door-finding explorer")
+    parser.add_argument(
+        "--greet", action="store_true",
+        help="Greet humans when detected (80%% 'Hello human' / 20%% Yoda variant)",
+    )
+    args = parser.parse_args()
+    _greet_humans = args.greet
+
     log("=" * 60)
-    log("explore.py — YOLO obstacle avoidance + OpenCV + flow depth")
+    log("explore.py — YOLO + MiDaS + segmentation + OpenCV + flow depth")
     log(f"Strategy file: {STRATEGY_FILE}")
     log(f"Frames:        {FRAME_DIR}")
     log(f"Log:           {LOG_FILE}")
     log("=" * 60)
-    speak("Explore script starting. Hailo YOLO obstacle avoidance active.")
+    speak("Starting pre-flight model check.")
 
+    # ── Pre-flight: verify / download / compile all Hailo HEF models ─────────
+    # This runs before the pilot daemon check so a bad model path is caught
+    # immediately and gives a clear error before any hardware is touched.
+    # sys.exit(1) if yolo_det (required) cannot be resolved.
+    ensure_models(abort_if_required_missing=True)
+
+    # ── Pilot daemon ──────────────────────────────────────────────────────────
+    speak("Explore script starting. Connecting to pilot daemon.")
     r = send_cmd("full")
     log(f"pilot full: {r}")
     r = send_cmd("sense")
@@ -570,10 +727,14 @@ def main():
             "mode": "EXPLORE", "door_bearing": None, "notes": "initial"
         }, indent=2))
 
-    if init_hailo():
-        log("Hailo ready")
-    else:
-        log("Hailo not available — running OpenCV only")
+    # ── Load verified models into Hailo VDevice ───────────────────────────────
+    available = init_all_models()
+    loaded  = [k for k, v in available.items() if v]
+    missing = [k for k, v in available.items() if not v]
+    log(f"Models loaded:  {loaded}")
+    log(f"Models missing: {missing} (OpenCV door detection always runs)")
+    if missing:
+        speak(f"{len(missing)} vision models unavailable. Running with available models.")
 
     threads = [
         threading.Thread(target=_log_writer,         daemon=True, name="log"),

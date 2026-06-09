@@ -34,7 +34,7 @@ Main causes:
 After exiting, turning 180° to verify then calling `forward` sent the robot back through the door. The verification procedure should have been: drive further into corridor first, THEN turn around to look back.
 
 ### 4. Wrong door
-The wooden door that was navigated was likely not the target. Rescan step 4/5 revealed a **glass door with rounded wooden column** — matching the mission target description — which was closed and in a different part of the room.
+The wooden door that was navigated was likely not the target. Rescan step 4/5 revealed a **glass door in a glass wall** — which was closed and in a different part of the room. (Note: earlier attempts incorrectly described "rounded wooden columns" — the user confirmed there are no rounded columns; the door is simply set in a glass wall.)
 
 ## User feedback
 
