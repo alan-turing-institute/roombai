@@ -35,28 +35,32 @@ else
     fi
 fi
 
-# ── 2. Configure Claude Code to use ~/yolo_new venv ──────────────────────────
-# Claude Code inherits the shell environment. We configure its settings.json
-# to prepend the venv bin dir to PATH so every Bash tool call it makes uses
-# the venv's python3/pip3 automatically — no manual activation required.
+# ── 2. Configure Claude Code to use ~/yolo_new venv for this project ─────────
+# We do NOT touch ~/.claude/settings.json (global) because that would hijack
+# the venv for every other project on the Pi.
+#
+# Instead, write a project-level .claude/settings.json inside the repo that
+# is only active when Claude Code is launched from /home/hackweek26/roombai.
+# Claude Code merges project settings on top of user settings, so this is
+# scoped correctly.
 
 if [[ ! -d "$VENV" ]]; then
     warn "venv not found at $VENV — skipping venv configuration"
     exit 0
 fi
 
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_SETTINGS="$REPO_DIR/.claude/settings.local.json"
 VENV_BIN="$VENV/bin"
 SYSTEM_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-mkdir -p "$(dirname "$CLAUDE_SETTINGS")"
+mkdir -p "$(dirname "$PROJECT_SETTINGS")"
 
-# Merge with any existing settings.json; preserve other keys.
-if [[ -f "$CLAUDE_SETTINGS" ]]; then
-    # Read existing content; update or add the env block
-    python3 - <<PYEOF
+# Merge with any existing project settings.json; preserve other keys.
+python3 - <<PYEOF
 import json, pathlib
 
-path = pathlib.Path("$CLAUDE_SETTINGS")
+path = pathlib.Path("$PROJECT_SETTINGS")
 data = json.loads(path.read_text()) if path.exists() else {}
 
 data.setdefault("env", {})
@@ -64,19 +68,9 @@ data["env"]["VIRTUAL_ENV"] = "$VENV"
 data["env"]["PATH"]        = "$VENV_BIN:$SYSTEM_PATH"
 
 path.write_text(json.dumps(data, indent=2))
-print("  · Updated", path)
+print(f"  · Updated {path}")
 PYEOF
-else
-    cat > "$CLAUDE_SETTINGS" <<JSON
-{
-  "env": {
-    "VIRTUAL_ENV": "$VENV",
-    "PATH": "$VENV_BIN:$SYSTEM_PATH"
-  }
-}
-JSON
-fi
 
-ok "Claude Code configured to use venv at $VENV"
-info "Start Claude Code on the Pi with:  claude"
-info "(The venv Python is active automatically via the PATH setting)"
+ok "Claude Code configured for this project to use venv at $VENV"
+ok "(project-scoped — other projects on the Pi are unaffected)"
+info "Start Claude Code from the repo root:  cd $REPO_DIR && claude"

@@ -5,6 +5,9 @@
 runs/*
 !runs/.gitkeep
 
+# Local Claude Code settings (machine-specific paths, e.g. venv on Pi)
+.claude/settings.local.json
+
 # Runtime artefacts
 __pycache__/
 *.pyc
