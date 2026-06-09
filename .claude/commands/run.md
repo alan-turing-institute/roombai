@@ -15,15 +15,24 @@ If `.pi_host` does not exist or is empty, ask the user:
 > "What is the SSH address for the Raspberry Pi? (e.g. hackweek26@192.168.1.x)"
 Then write the answer to `.pi_host` (one line, no trailing newline).
 
-### 2. Push latest code to the Pi
+### 2. Sync the Pi to the current branch
 
-Run:
+First, find out which branch is currently checked out on this machine:
 ```
-ssh <pi_host> "cd /home/hackweek26/roombai && git pull --ff-only"
+git rev-parse --abbrev-ref HEAD
 ```
 
-If the pull fails (merge conflict, diverged history, etc.) report the error
-and stop — do not proceed with a stale codebase.
+Then on the Pi, check what branch it is on and switch if needed:
+```
+ssh <pi_host> "cd /home/hackweek26/roombai && git fetch origin && git checkout <local_branch> && git pull --ff-only origin <local_branch>"
+```
+
+If the Pi has uncommitted local changes that would be overwritten, report
+them to the user and stop — do not discard work without permission.
+
+If the checkout or pull fails for any other reason (merge conflict, diverged
+history, etc.) report the full error and stop — do not proceed with a stale
+or mismatched codebase.
 
 ### 3. Ensure run.sh is executable on the Pi
 
