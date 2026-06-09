@@ -1884,7 +1884,7 @@ pub fn get_doors() -> Vec<Door> {
 
 pub fn get_room_labels() -> Vec<RoomLabel> {
     vec![
-        RoomLabel { name: "JACK GOOD (8)", pos: pdf_pt(106.73, 800.0) },
+        RoomLabel { name: "JACK GOOD (8)", pos: pdf_pt(180.0, 800.0) },
         RoomLabel { name: "DAVID BLACKWELL (8)", pos: pdf_pt(167.08, 830.0) },
         RoomLabel { name: "MARIAN REJEWSKI (5)", pos: pdf_pt(413.71, 800.0) },
         RoomLabel { name: "JOAN CLARKE (5)", pos: pdf_pt(453.05, 830.0) },
@@ -1896,15 +1896,15 @@ pub fn get_room_labels() -> Vec<RoomLabel> {
         RoomLabel { name: "CORRIDOR / HALLWAY", pos: pdf_pt(800.0, 730.0) },
         RoomLabel { name: "CIPHER (7)", pos: pdf_pt(225.0, 530.0) },
         RoomLabel { name: "TEA POINT", pos: pdf_pt(825.0, 530.0) },
-        RoomLabel { name: "FLORENCE NIGHTINGALE (6)", pos: pdf_pt(57.14, 406.67) },
+        RoomLabel { name: "FLORENCE NIGHTINGALE (6)", pos: pdf_pt(180.0, 410.0) },
         RoomLabel { name: "WELLBEING ROOM", pos: pdf_pt(559.04, 406.67) },
-        RoomLabel { name: "MAE JEMISON (7)", pos: pdf_pt(57.48, 446.19) },
+        RoomLabel { name: "MAE JEMISON (7)", pos: pdf_pt(180.0, 450.0) },
         RoomLabel { name: "MEDIA SUITE", pos: pdf_pt(609.30, 449.62) },
         RoomLabel { name: "STAFF LIFT LOBBY", pos: pdf_pt(1388.82, 510.57) },
         RoomLabel { name: "PROJECT SPACE (4)", pos: pdf_pt(541.10, 537.48) },
         RoomLabel { name: "MAIN FIRST FLOOR KITCHEN", pos: pdf_pt(1302.41, 558.22) },
         RoomLabel { name: "RECEPTION DESK", pos: pdf_pt(1394.43, 617.34) },
         RoomLabel { name: "PRINTER POINT", pos: pdf_pt(1415.43, 668.17) },
-        RoomLabel { name: "URSULA FRANKLIN (6)", pos: pdf_pt(1360.67, 390.80) },
+        RoomLabel { name: "URSULA FRANKLIN (6)", pos: pdf_pt(1360.67, 420.0) },
     ]
 }

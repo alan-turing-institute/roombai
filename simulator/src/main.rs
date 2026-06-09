@@ -441,25 +441,58 @@ fn dist_to_segment(p: Vec2, p1: Vec2, p2: Vec2) -> f32 {
     (p - closest_point).length()
 }
 
-fn pick_human_target(is_enigma: bool, room_labels: &[RoomLabel]) -> Vec2 {
-    if is_enigma {
-        // Enigma boundaries in PDF coordinates:
-        // X in [1333.74, 1603.54]
-        // Y in [744.08, 866.63]
-        // Safe inner bounds:
+fn is_segment_intersecting_map(p1: Vec2, p2: Vec2, walls: &[Segment], doors: &[Door]) -> bool {
+    let to_end = p2 - p1;
+    let dist = to_end.length();
+    if dist < 1.0 {
+        return false;
+    }
+    let dir = to_end / dist;
+    
+    // Check walls
+    for wall in walls {
+        if let Some(t) = ray_intersect_segment(p1, dir, wall.p1, wall.p2) {
+            if t <= dist {
+                return true;
+            }
+        }
+    }
+    
+    // Check doors
+    for door in doors {
+        if let Some(t) = ray_intersect_segment(p1, dir, door.p1, door.p2) {
+            if t <= dist {
+                return true;
+            }
+        }
+    }
+    
+    false
+}
+
+fn pick_human_target(is_enigma: bool, room_labels: &[RoomLabel]) -> (Vec2, bool) {
+    let roll = macroquad::rand::gen_range(0.0, 1.0);
+    let target_is_enigma = if is_enigma {
+        roll >= 0.40
+    } else {
+        roll < 0.40
+    };
+
+    if target_is_enigma {
         let rx = macroquad::rand::gen_range(1350.0, 1580.0);
         let ry = macroquad::rand::gen_range(755.0, 855.0);
-        Vec2::new(rx * PDF_TO_MM, ry * PDF_TO_MM)
+        (Vec2::new(rx * PDF_TO_MM, ry * PDF_TO_MM), true)
     } else {
         let non_enigma_labels: Vec<&RoomLabel> = room_labels
             .iter()
             .filter(|rl| !rl.name.contains("ENIGMA"))
             .collect();
         if non_enigma_labels.is_empty() {
-            return Vec2::new(1520.0 * PDF_TO_MM, 775.0 * PDF_TO_MM);
+            (Vec2::new(1520.0 * PDF_TO_MM, 775.0 * PDF_TO_MM), true)
+        } else {
+            let idx = macroquad::rand::rand() as usize % non_enigma_labels.len();
+            (non_enigma_labels[idx].pos, false)
         }
-        let idx = macroquad::rand::rand() as usize % non_enigma_labels.len();
-        non_enigma_labels[idx].pos
     }
 }
 
@@ -473,45 +506,61 @@ fn generate_humans(room_labels: &[RoomLabel], walls: &[Segment], doors: &[Door])
     ];
     let mut humans = Vec::new();
 
-    // Spawn 3 Enigma humans
-    for i in 0..3 {
+    // 1. Spawn 10 Enigma humans
+    for i in 0..10 {
         let rx = macroquad::rand::gen_range(1350.0, 1580.0);
         let ry = macroquad::rand::gen_range(755.0, 855.0);
         let mut pos = Vec2::new(rx * PDF_TO_MM, ry * PDF_TO_MM);
         pos = resolve_pos_collisions_with_map(pos, HUMAN_RADIUS_MM, walls, doors);
-        let target = pick_human_target(true, room_labels);
+        let (target, _is_en) = pick_human_target(true, room_labels);
         let speed = macroquad::rand::gen_range(120.0, 180.0);
         humans.push(Human {
             pos,
             target,
             speed,
-            color: colors[i],
+            color: colors[i % colors.len()],
             is_enigma: true,
         });
     }
 
-    // Spawn 2 Non-Enigma humans
+    // 2. Spawn 10 Non-Enigma humans
     let non_enigma_labels: Vec<&RoomLabel> = room_labels
         .iter()
         .filter(|rl| !rl.name.contains("ENIGMA"))
         .collect();
 
-    for i in 0..2 {
-        let label_pos = if !non_enigma_labels.is_empty() {
-            let idx = macroquad::rand::rand() as usize % non_enigma_labels.len();
-            non_enigma_labels[idx].pos
-        } else {
-            Vec2::new(1520.0 * PDF_TO_MM, 775.0 * PDF_TO_MM)
-        };
-        let mut pos = label_pos;
+    let mut attempts = 0;
+    while humans.len() < 20 && attempts < 2000 {
+        attempts += 1;
+        if non_enigma_labels.is_empty() {
+            break;
+        }
+        let idx = macroquad::rand::rand() as usize % non_enigma_labels.len();
+        let label_pos = non_enigma_labels[idx].pos;
+
+        let angle = macroquad::rand::gen_range(0.0, 2.0 * std::f32::consts::PI);
+        let dist = macroquad::rand::gen_range(0.0, 1000.0);
+        let offset = Vec2::new(angle.cos() * dist, angle.sin() * dist);
+        let pos_mm = label_pos + offset;
+
+        if is_segment_intersecting_map(label_pos, pos_mm, walls, doors) {
+            continue;
+        }
+
+        let mut pos = pos_mm;
         pos = resolve_pos_collisions_with_map(pos, HUMAN_RADIUS_MM, walls, doors);
-        let target = pick_human_target(false, room_labels);
+        if (pos - pos_mm).length_squared() > 1.0 {
+            continue;
+        }
+
+        let (target, _is_en) = pick_human_target(false, room_labels);
         let speed = macroquad::rand::gen_range(120.0, 180.0);
+        let i_h = humans.len();
         humans.push(Human {
             pos,
             target,
             speed,
-            color: colors[3 + i],
+            color: colors[i_h % colors.len()],
             is_enigma: false,
         });
     }
@@ -596,6 +645,10 @@ fn generate_obstacles(
         let offset = Vec2::new(angle.cos() * dist, angle.sin() * dist);
         let pos_mm = label_pos + offset;
         let radius = macroquad::rand::gen_range(180.0, 250.0);
+
+        if is_segment_intersecting_map(label_pos, pos_mm, walls, doors) {
+            continue;
+        }
 
         // Don't spawn blocking doorways
         let mut near_door = false;
@@ -984,18 +1037,20 @@ async fn main() {
                     let to_target = human.target - human.pos;
                     let dist = to_target.length();
                     if dist < 300.0 {
-                        human.target = pick_human_target(human.is_enigma, &room_labels);
+                        let (new_target, is_en) = pick_human_target(human.is_enigma, &room_labels);
+                        human.target = new_target;
+                        human.is_enigma = is_en;
                     } else {
                         let dir = to_target / dist;
                         let candidate_pos = human.pos + dir * human.speed * step;
-                        human.pos = resolve_pos_collisions_with_map(candidate_pos, HUMAN_RADIUS_MM, &walls, &doors);
-                        if human.is_enigma {
-                            let min_x = 1335.0 * PDF_TO_MM;
-                            let max_x = 1602.0 * PDF_TO_MM;
-                            let min_y = 746.0 * PDF_TO_MM;
-                            let max_y = 864.0 * PDF_TO_MM;
-                            human.pos.x = human.pos.x.clamp(min_x, max_x);
-                            human.pos.y = human.pos.y.clamp(min_y, max_y);
+                        let resolved_pos = resolve_pos_collisions_with_map(candidate_pos, HUMAN_RADIUS_MM, &walls, &doors);
+                        if (resolved_pos - human.pos).length() < 10.0 * step {
+                            // Blocked or stuck, choose a new target immediately
+                            let (new_target, is_en) = pick_human_target(human.is_enigma, &room_labels);
+                            human.target = new_target;
+                            human.is_enigma = is_en;
+                        } else {
+                            human.pos = resolved_pos;
                         }
                     }
                 }
