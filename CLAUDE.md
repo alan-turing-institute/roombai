@@ -55,48 +55,91 @@ Default port: `127.0.0.1:9999`. The robot **must be powered on before the daemon
 
 `rpicam-still` and `rpicam-hello` can be used to capture still or video, respectively. Please note that the camera is mounted upside down.
 
-#### Frame recording during escape attempts
+---
 
-You must capture a still at every decision point and save it — with an elapsed-time overlay — to a per-attempt directory:
+## Run recording (mandatory for every attempt)
+
+Every attempt **must** produce a self-contained run directory that is uploaded to OneDrive after the run. This is non-negotiable — it feeds the competition leaderboard.
+
+### Run directory structure
+
+```
+/tmp/escape_attempt_N/
+  ├── frames/
+  │     ├── frame_0001.jpg   (still with elapsed-time overlay)
+  │     ├── frame_0002.jpg
+  │     └── …
+  ├── timelapse.mp4
+  └── metadata.json
+```
+
+### 1. Start of attempt — initialise
 
 ```bash
-# At the start of each attempt: create frame directory and record start time
-mkdir -p /tmp/escape_attempt_N/frames
-START_TIME=$(date +%s)
+# Determine attempt number from existing directories
+ATTEMPT_N=$(( $(ls -d /tmp/escape_attempt_* 2>/dev/null | wc -l) + 1 ))
+ATTEMPT_DIR=/tmp/escape_attempt_${ATTEMPT_N}
+mkdir -p "${ATTEMPT_DIR}/frames"
 
-# At each decision point (FRAME_IDX is a zero-padded counter: 0001, 0002, …):
+# Read pilot identity from git (branch name = pilot name)
+PILOT_NAME=$(git -C "$(git rev-parse --show-toplevel)" rev-parse --abbrev-ref HEAD)
+COMMIT_HASH=$(git -C "$(git rev-parse --show-toplevel)" rev-parse --short HEAD)
+
+# Start timer and zero counters
+START_TIME=$(date +%s)
+TOOL_CALLS=0
+DECISIONS=0
+```
+
+Increment `TOOL_CALLS` by 1 each time a `pilot send` command is issued.  
+Increment `DECISIONS` by 1 each time a camera frame is analysed to make a navigation decision.
+
+### 2. At every decision point — capture a frame
+
+```bash
+# FRAME_IDX is a zero-padded counter: 0001, 0002, …
 ELAPSED=$(( $(date +%s) - START_TIME ))
 ELAPSED_FMT=$(printf '%02d:%02d' $(( ELAPSED / 60 )) $(( ELAPSED % 60 )))
 rpicam-still -o /tmp/frame_raw.jpg --nopreview -t 1 2>/dev/null
 convert /tmp/frame_raw.jpg \
   -fill white -stroke black -strokewidth 1 \
   -pointsize 100 -annotate +10+44 "${ELAPSED_FMT}" \
-  /tmp/escape_attempt_N/frames/frame_${FRAME_IDX}.jpg
-
-# After the attempt ends (success or abort), stitch into a timelapse video
-TOTAL=$(( $(date +%s) - START_TIME ))
-ffmpeg -y -framerate 2 -pattern_type glob -i '/tmp/escape_attempt_N/frames/*.jpg' \
-  -c:v libx264 -pix_fmt yuv420p /tmp/escape_attempt_N/timelapse.mp4
-echo "Attempt duration: $(printf '%02d:%02d' $(( TOTAL / 60 )) $(( TOTAL % 60 )))" \
-  >> /tmp/execution_log.txt
+  "${ATTEMPT_DIR}/frames/frame_${FRAME_IDX}.jpg"
 ```
 
-- `convert` is from ImageMagick (pre-installed on Raspberry Pi OS); it burns `MM:SS` elapsed time into the top-left corner of each still before saving.
-- You should log the frame filename and elapsed time alongside each entry in `/tmp/execution_log.txt` so frames are traceable to decisions.
-- Stitching runs once at the very end of the attempt (not during motion).
-- The total attempt duration is written to the execution log on completion.
+`convert` is from ImageMagick (pre-installed on Raspberry Pi OS). It burns `MM:SS` elapsed time into the top-left corner of each still.
 
----
-
-## OneDrive upload
-
-After a run, upload the attempt directory manually using the provided script:
+### 3. End of attempt — stitch timelapse and write metadata
 
 ```bash
-./upload_run.sh /tmp/escape_attempt_N
+# Stitch frames into timelapse
+ffmpeg -y -framerate 2 -pattern_type glob -i "${ATTEMPT_DIR}/frames/*.jpg" \
+  -c:v libx264 -pix_fmt yuv420p "${ATTEMPT_DIR}/timelapse.mp4"
+
+# Write metadata  (OUTCOME is "escaped" or "dnf")
+DURATION_S=$(( $(date +%s) - START_TIME ))
+cat > "${ATTEMPT_DIR}/metadata.json" <<EOF
+{
+  "name":       "${PILOT_NAME}",
+  "commit":     "${COMMIT_HASH}",
+  "date":       "$(date +%Y-%m-%d)",
+  "duration_s": ${DURATION_S},
+  "tool_calls": ${TOOL_CALLS},
+  "decisions":  ${DECISIONS},
+  "outcome":    "${OUTCOME}"
+}
+EOF
 ```
 
-See `upload_run.sh` for setup instructions (one-time `rclone config` required).
+### 4. Upload
+
+After the attempt, run from the project root:
+
+```bash
+./upload_run.sh "${ATTEMPT_DIR}"
+```
+
+See `upload_run.sh` for one-time `rclone` setup instructions.
 
 ---
 
@@ -125,126 +168,6 @@ obstacles encountered, waiting states, and arrival confirmation.
 
 ---
 
-## Escape Protocol
+## Escape Strategy
 
-When asked to escape the room, act as **Orchestrator** and run a subagent team via the `Agent` tool. The protocol follows three phases per attempt — Scout, Navigate, Confirm — with a Critic running in parallel during Navigate. Loop across attempts until escape is confirmed or human input is needed.
-
----
-
-### Pre-flight: create run directory & read git identity
-
-At the very start of each attempt, create the run directory and read identity from git:
-
-```bash
-# Determine attempt number from how many attempt dirs already exist
-ATTEMPT_N=$(( $(ls -d /tmp/escape_attempt_* 2>/dev/null | wc -l) + 1 ))
-ATTEMPT_DIR=/tmp/escape_attempt_${ATTEMPT_N}
-mkdir -p "${ATTEMPT_DIR}/frames"
-
-# Identity — pilots work on a branch named after themselves, e.g. alice/attempt-1
-PILOT_NAME=$(git -C /path/to/roombai rev-parse --abbrev-ref HEAD)
-COMMIT_HASH=$(git -C /path/to/roombai rev-parse --short HEAD)
-START_TIME=$(date +%s)
-TOOL_CALLS=0
-DECISIONS=0
-```
-
-Initialise counters — the Orchestrator increments these throughout the run:
-- `TOOL_CALLS` — increment by 1 each time a `pilot send` command is issued
-- `DECISIONS` — increment by 1 each time a camera frame is analysed for navigation
-
----
-
-### Run metadata file
-
-At the end of the attempt, write a `metadata.json` into the run directory before uploading:
-
-```bash
-DURATION_S=$(( $(date +%s) - START_TIME ))
-
-cat > "${ATTEMPT_DIR}/metadata.json" <<EOF
-{
-  "name":       "${PILOT_NAME}",
-  "commit":     "${COMMIT_HASH}",
-  "date":       "$(date +%Y-%m-%d)",
-  "duration_s": ${DURATION_S},
-  "tool_calls": ${TOOL_CALLS},
-  "decisions":  ${DECISIONS},
-  "outcome":    "${OUTCOME}"
-}
-EOF
-```
-
-Replace `/path/to/roombai` with the actual absolute path to the project root.
-
----
-
-### Phase 1 — Scout
-
-**Goal:** determine the door's bearing *before* any forward motion.
-
-The Executor spins 360° in place, capturing a frame every ~30° (12 frames total). It then analyses all frames together to:
-- Identify which frame(s) show an open door or doorframe gap
-- Estimate the door's bearing relative to current heading (0° = forward)
-- Note any large obstacles between the robot and the door
-
-Output: a `scout_result` logged to `/tmp/execution_log.txt`:
-```
-scout: door_bearing=<deg> door_confidence=<0-1> obstacles=<description>
-```
-
-If no door is found with confidence ≥ 0.5, rotate an additional 180° and repeat once before escalating to the Critic.
-
----
-
-### Phase 2 — Navigate
-
-**Goal:** reach the door using short move-and-reassess bursts.
-
-The Executor runs a tight loop:
-
-1. **Turn** to align with current best door bearing
-2. **Move forward 30 cm** (use `move 30`)
-3. **Capture frame**, re-assess:
-   - Door visible and closer → update bearing, continue
-   - Obstacle ahead → turn away, re-scan with a 90° sweep to reacquire door
-   - Door lost entirely → run a mini-scout (180° sweep) to reacquire
-4. **Check bumpers** after every move (`bumps`); if bumped, back up 10 cm and turn 30° away from bump side before continuing
-5. Log every step: frame filename, elapsed time, bearing, confidence, action taken
-
-The **Critic** runs in parallel, tailing `/tmp/execution_log.txt`. It delivers verdicts:
-- `CONTINUE` — bearing is converging, door confidence is rising, or obstacle avoidance is working
-- `ITERATE` — stuck in a local loop (same bearing ±10° for 3+ steps with no progress); recommend a specific corrective turn
-- `ABANDON` — fundamentally not converging (door never found, repeated bumps in all directions, battery critical); provide a concrete diagnosis
-
-Time limit per Navigate phase: **3 minutes**. Critic must ABANDON if time limit is exceeded.
-
----
-
-### Phase 3 — Confirm
-
-**Goal:** verify the robot has passed through the door.
-
-Triggered when the door fills >50% of the camera frame. The Executor:
-
-1. Slows to `move 20` (20 cm bursts) and moves through the doorframe
-2. Captures a frame immediately after crossing; compares it to the scout frames — if the scene is clearly different (corridor, different room, open space) → **ESCAPED**
-3. As a secondary signal: if the robot travels the expected door width (~80 cm) without a bump, that confirms crossing
-
-On confirmed escape:
-- Speak "Escape successful"
-- Stop motors (`stop`)
-- Stitch timelapse and log total duration
-- Set `OUTCOME="escaped"`, write `metadata.json` into the run directory
-
----
-
-### Outer loop (across attempts)
-
-After each attempt:
-1. Write `attempt_N_review.md` summarising: scout findings, navigation trace, Critic verdicts, why it succeeded or failed.
-2. If the attempt ended in ABANDON/timeout, set `OUTCOME="dnf"`, write `metadata.json` into the run directory.
-
-On failure, the **Strategist** reads all review files and proposes the next attempt's adjustments (e.g. different scout granularity, obstacle avoidance strategy, speed). The **Researcher** is called by the Strategist only between attempts — never during active motion.
-
-**Loop:** Scout → [Navigate ∥ Critic] → Confirm → if failed, Strategist (+ Researcher) → next attempt.
+<!-- Each competitor defines their own strategy here. -->
