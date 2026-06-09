@@ -70,10 +70,11 @@ struct Door {
 
 const HUMAN_RADIUS_MM: f32 = 250.0; // 25 cm radius
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Human {
     pos: Vec2,
     target: Vec2,
+    path: Vec<Vec2>,
     speed: f32, // mm/s
     color: Color,
     is_enigma: bool,
@@ -496,6 +497,66 @@ fn pick_human_target(is_enigma: bool, room_labels: &[RoomLabel]) -> (Vec2, bool)
     }
 }
 
+fn get_waypoint_for_pos(pos: Vec2) -> Vec2 {
+    let x = pos.x / PDF_TO_MM;
+    let y = pos.y / PDF_TO_MM;
+
+    if x >= 1277.65 {
+        // Enigma
+        pdf_pt(1260.0, 730.0)
+    } else if x <= 225.0 && y >= 714.48 {
+        // Jack Good / David Blackwell
+        pdf_pt(240.0, 730.0)
+    } else if x <= 483.84 && y >= 744.08 {
+        // Marian Rejewski / Joan Clarke
+        pdf_pt(240.0, 730.0)
+    } else if x <= 731.77 && y >= 744.08 {
+        // Ada
+        pdf_pt(675.0, 730.0)
+    } else if x <= 893.80 && y >= 744.08 {
+        // Lovelace
+        pdf_pt(800.0, 730.0)
+    } else if x <= 1277.65 && y >= 744.08 {
+        // Margaret Hamilton / CEO Office
+        pdf_pt(1160.0, 730.0)
+    } else if x <= 536.84 && y <= 624.57 {
+        // Bottom left rooms (Cipher, Nightingale, etc.)
+        pdf_pt(510.0, 640.0)
+    } else if x <= 1003.14 && y <= 697.78 {
+        // Tea Point / Kitchen
+        pdf_pt(880.0, 640.0)
+    } else if x <= 1108.83 && y <= 623.96 {
+        // Ursula Franklin / Lobby
+        pdf_pt(1050.0, 640.0)
+    } else {
+        // Default to corridor center
+        pdf_pt(800.0, 730.0)
+    }
+}
+
+fn plan_path(start: Vec2, end: Vec2) -> Vec<Vec2> {
+    let wp_start = get_waypoint_for_pos(start);
+    let wp_end = get_waypoint_for_pos(end);
+    
+    let mut path = Vec::new();
+    if wp_start.distance(wp_end) > 10.0 {
+        path.push(wp_start);
+        
+        if (wp_start.y / PDF_TO_MM - 730.0).abs() > 10.0 {
+            path.push(pdf_pt(wp_start.x / PDF_TO_MM, 730.0));
+        }
+        
+        if (wp_end.y / PDF_TO_MM - 730.0).abs() > 10.0 {
+            path.push(pdf_pt(wp_end.x / PDF_TO_MM, 730.0));
+        }
+        
+        path.push(wp_end);
+    }
+    
+    path.push(end);
+    path
+}
+
 fn generate_humans(room_labels: &[RoomLabel], walls: &[Segment], doors: &[Door]) -> Vec<Human> {
     let colors = [
         Color::from_rgba(255, 105, 180, 255), // Hot Pink
@@ -512,14 +573,16 @@ fn generate_humans(room_labels: &[RoomLabel], walls: &[Segment], doors: &[Door])
         let ry = macroquad::rand::gen_range(755.0, 855.0);
         let mut pos = Vec2::new(rx * PDF_TO_MM, ry * PDF_TO_MM);
         pos = resolve_pos_collisions_with_map(pos, HUMAN_RADIUS_MM, walls, doors);
-        let (target, _is_en) = pick_human_target(true, room_labels);
+        let (target, is_en) = pick_human_target(true, room_labels);
+        let path = plan_path(pos, target);
         let speed = macroquad::rand::gen_range(120.0, 180.0);
         humans.push(Human {
             pos,
             target,
+            path,
             speed,
             color: colors[i % colors.len()],
-            is_enigma: true,
+            is_enigma: is_en,
         });
     }
 
@@ -553,15 +616,17 @@ fn generate_humans(room_labels: &[RoomLabel], walls: &[Segment], doors: &[Door])
             continue;
         }
 
-        let (target, _is_en) = pick_human_target(false, room_labels);
+        let (target, is_en) = pick_human_target(false, room_labels);
+        let path = plan_path(pos, target);
         let speed = macroquad::rand::gen_range(120.0, 180.0);
         let i_h = humans.len();
         humans.push(Human {
             pos,
             target,
+            path,
             speed,
             color: colors[i_h % colors.len()],
-            is_enigma: false,
+            is_enigma: is_en,
         });
     }
 
@@ -1034,21 +1099,28 @@ async fn main() {
                 let step = step_size.min(total_dt - elapsed);
                 // Update humans
                 for human in &mut humans {
-                    let to_target = human.target - human.pos;
-                    let dist = to_target.length();
-                    if dist < 300.0 {
+                    if human.path.is_empty() {
                         let (new_target, is_en) = pick_human_target(human.is_enigma, &room_labels);
                         human.target = new_target;
                         human.is_enigma = is_en;
+                        human.path = plan_path(human.pos, new_target);
+                    }
+                    
+                    let next_wp = human.path[0];
+                    let to_wp = next_wp - human.pos;
+                    let dist = to_wp.length();
+                    if dist < 300.0 {
+                        human.path.remove(0);
                     } else {
-                        let dir = to_target / dist;
+                        let dir = to_wp / dist;
                         let candidate_pos = human.pos + dir * human.speed * step;
                         let resolved_pos = resolve_pos_collisions_with_map(candidate_pos, HUMAN_RADIUS_MM, &walls, &doors);
                         if (resolved_pos - human.pos).length() < 10.0 * step {
-                            // Blocked or stuck, choose a new target immediately
+                            // Blocked or stuck, choose a new target and replan
                             let (new_target, is_en) = pick_human_target(human.is_enigma, &room_labels);
                             human.target = new_target;
                             human.is_enigma = is_en;
+                            human.path = plan_path(human.pos, new_target);
                         } else {
                             human.pos = resolved_pos;
                         }
