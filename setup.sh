@@ -39,29 +39,26 @@ cargo build
 echo "✓ Pilot binary built at roomba_pilot/target/debug/pilot"
 cd "${REPO_ROOT}"
 
-# ── Step 3: rclone Azure Blob config ─────────────────────────────────────────
+# ── Step 3: SAS token file ────────────────────────────────────────────────────
 echo ""
-echo "━━━ Step 3/4 — Configuring rclone (Azure Blob Storage) ━━━━━━━━━━━━━━━━━"
-if rclone listremotes | grep -q "^roombai:"; then
-    echo "  rclone remote 'roombai' already configured — skipping"
-    echo "  (to reconfigure: rclone config, delete 'roombai', then re-run this script)"
+echo "━━━ Step 3/4 — Azure Blob SAS token ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+SAS_TOKEN_FILE="${HOME}/.secrets/roombai_sas"
+mkdir -p "${HOME}/.secrets"
+if [ -f "$SAS_TOKEN_FILE" ]; then
+    echo "  SAS token file already exists at ${SAS_TOKEN_FILE} — skipping"
+    echo "  (to update: replace the contents of that file and re-run)"
 else
     echo ""
-    echo "  You will need:"
-    echo "    - Azure Storage Account name"
-    echo "    - Azure Storage Account access key (or SAS token)"
-    echo "    - Container name (e.g. 'attempts')"
+    echo "  Paste your Azure Blob SAS URL below (from the Azure portal)."
+    echo "  It should start with: https://<account>.blob.core.windows.net/?sv=..."
     echo ""
-    rclone config
-    # Create the container if it doesn't exist
-    if rclone listremotes | grep -q "^roombai:"; then
-        rclone mkdir roombai:attempts 2>/dev/null || true
-        echo "✓ rclone remote 'roombai' configured"
-    else
-        echo "  ⚠ rclone remote 'roombai' not found after config — uploads will not work."
-        echo "    Re-run ./setup.sh or run 'rclone config' manually."
-    fi
+    read -rp "  SAS URL: " sas_url
+    echo "$sas_url" > "$SAS_TOKEN_FILE"
+    chmod 600 "$SAS_TOKEN_FILE"
+    echo "✓ SAS token saved to ${SAS_TOKEN_FILE}"
 fi
+echo ""
+echo "  Also set your storage account name in scripts/upload_run.sh (AZURE_ACCOUNT)."
 
 # ── Step 4: verify ────────────────────────────────────────────────────────────
 echo ""
