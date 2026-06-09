@@ -55,7 +55,7 @@ Default port: `127.0.0.1:9999`. The robot **must be powered on before the daemon
 
 #### Frame recording during escape attempts
 
-The Executor must capture a still at every decision point and save it — with an elapsed-time overlay — to a per-attempt directory:
+You must capture a still at every decision point and save it — with an elapsed-time overlay — to a per-attempt directory:
 
 ```bash
 # At the start of each attempt: create frame directory and record start time
@@ -80,7 +80,7 @@ echo "Attempt duration: $(printf '%02d:%02d' $(( TOTAL / 60 )) $(( TOTAL % 60 ))
 ```
 
 - `convert` is from ImageMagick (pre-installed on Raspberry Pi OS); it burns `MM:SS` elapsed time into the top-left corner of each still before saving.
-- The Executor should log the frame filename and elapsed time alongside each entry in `/tmp/execution_log.txt` so frames are traceable to decisions.
+- You should log the frame filename and elapsed time alongside each entry in `/tmp/execution_log.txt` so frames are traceable to decisions.
 - Stitching runs once at the very end of the attempt (not during motion).
 - The total attempt duration is written to the execution log on completion.
 
