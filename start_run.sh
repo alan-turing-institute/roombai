@@ -53,8 +53,18 @@ done
 
 # ── Step 4: launch Claude and run /escape ───────────────────────────────────
 echo ""
-echo "━━━ Step 4/4 — Launching Claude ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "━━━ Step 4/5 — Launching Claude ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Pilot log: /tmp/pilot_daemon.log"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 cd "${REPO_ROOT}"
 claude "/escape"
+
+# ── Step 5: upload run artifacts to OneDrive ─────────────────────────────────
+echo ""
+echo "━━━ Step 5/5 — Uploading run to OneDrive ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+LATEST_ATTEMPT=$(ls -dt /tmp/escape_attempt_* 2>/dev/null | head -1)
+if [ -z "$LATEST_ATTEMPT" ]; then
+    echo "  No attempt directory found in /tmp — nothing to upload."
+else
+    "${REPO_ROOT}/upload_run.sh" "$LATEST_ATTEMPT"
+fi

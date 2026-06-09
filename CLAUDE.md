@@ -131,16 +131,6 @@ cat > "${ATTEMPT_DIR}/metadata.json" <<EOF
 EOF
 ```
 
-### 4. Upload
-
-After the attempt, run from the project root:
-
-```bash
-./upload_run.sh "${ATTEMPT_DIR}"
-```
-
-See `upload_run.sh` for one-time `rclone` setup instructions.
-
 ---
 
 ## Constraints
