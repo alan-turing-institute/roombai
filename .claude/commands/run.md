@@ -15,24 +15,58 @@ If `.pi_host` does not exist or is empty, ask the user:
 > "What is the SSH address for the Raspberry Pi? (e.g. hackweek26@192.168.1.x)"
 Then write the answer to `.pi_host` (one line, no trailing newline).
 
-### 2. Sync the Pi to the current branch
+### 2. Commit and push any local changes on this machine
 
-First, find out which branch is currently checked out on this machine:
+Before touching the Pi, make sure GitHub has the latest code to pull from.
+
+Check for uncommitted changes:
+```
+git status --short
+git diff --stat
+```
+
+If there are staged or unstaged changes, commit them:
+```
+git add -A
+git commit -m "Pre-run commit before deploying to Pi"
+```
+
+Then push to GitHub regardless (ensures Pi can fast-forward):
+```
+git push
+```
+
+If the push is rejected (remote has commits not yet pulled locally), pull
+and rebase first:
+```
+git pull --rebase && git push
+```
+
+### 3. Sync the Pi to the current branch
+
+Find out which branch is currently checked out on this machine:
 ```
 git rev-parse --abbrev-ref HEAD
 ```
 
-Then on the Pi, check what branch it is on and switch if needed:
+SSH to the Pi and, **before switching branches**, commit any uncommitted
+changes there so nothing is lost:
 ```
-ssh <pi_host> "cd /home/hackweek26/roombai && git fetch origin && git checkout <local_branch> && git pull --ff-only origin <local_branch>"
+ssh <pi_host> "cd /home/hackweek26/roombai \
+  && git diff --quiet && git diff --cached --quiet \
+  || git add -A && git commit -m 'Pi pre-switch commit $(date +%Y-%m-%d_%H:%M)'"
 ```
 
-If the Pi has uncommitted local changes that would be overwritten, report
-them to the user and stop — do not discard work without permission.
+Then switch to the correct branch and pull:
+```
+ssh <pi_host> "cd /home/hackweek26/roombai \
+  && git fetch origin \
+  && git checkout <local_branch> \
+  && git pull --ff-only origin <local_branch>"
+```
 
-If the checkout or pull fails for any other reason (merge conflict, diverged
-history, etc.) report the full error and stop — do not proceed with a stale
-or mismatched codebase.
+If the pull fails for any reason (diverged history, merge conflict, etc.)
+report the full error and stop — do not proceed with a mismatched codebase.
 
 ### 3. Ensure run.sh is executable on the Pi
 
