@@ -4994,3 +4994,13 @@
 [2026-06-08 15:35:16.318] [23294] [HailoRT] [info] [queue_elements.cpp:46] [~BaseQueueElement] Queue element PushQEl3yolov8s/input_layer1 has 0 frames in his Queue on destruction
 [2026-06-08 15:35:16.319] [23294] [HailoRT] [info] [core_op.cpp:186] [deactivate] Deactivating took 0.559996 ms
 [2026-06-08 15:35:16.319] [23294] [HailoRT] [info] [core_op.cpp:186] [deactivate] Deactivating took 0.567552 ms
+[2026-06-09 10:39:39.297] [12321] [HailoRT] [info] [vdevice.cpp:535] [create] Creating vdevice with params: device_count: 1, scheduling_algorithm: NONE, multi_process_service: false
+[2026-06-09 10:39:39.315] [12321] [HailoRT] [info] [device.cpp:51] [Device] OS Version: Linux 6.18.33+rpt-rpi-2712 #1 SMP PREEMPT Debian 1:6.18.33-1+rpt1 (2026-06-01) aarch64
+[2026-06-09 10:39:39.315] [12321] [HailoRT] [info] [control.cpp:113] [control__parse_identify_results] firmware_version is: 4.23.0
+[2026-06-09 10:39:39.315] [12321] [HailoRT] [info] [vdevice.cpp:682] [create] VDevice Infos: 0001:01:00.0
+[2026-06-09 10:39:39.316] [12321] [HailoRT] [warning] [device_internal.cpp:616] [check_hef_is_compatible] HEF was compiled for Hailo8L device, while the device itself is Hailo8. This will result in lower performance.
+[2026-06-09 10:39:39.317] [12321] [HailoRT] [warning] [device_internal.cpp:616] [check_hef_is_compatible] HEF was compiled for Hailo8L device, while the device itself is Hailo8. This will result in lower performance.
+[2026-06-09 10:39:39.324] [12321] [HailoRT] [info] [internal_buffer_manager.cpp:77] [print_execution_results] Planned internal buffer memory: CMA=0 CMA-Desc=589824 Pinned=2277888. memory to edge layer usage factor is 1
+[2026-06-09 10:39:39.324] [12321] [HailoRT] [info] [internal_buffer_manager.cpp:86] [print_execution_results] Default Internal buffer planner executed successfully
+[2026-06-09 10:39:39.349] [12321] [HailoRT] [info] [device_internal.cpp:57] [configure] Configuring HEF took 31.988916 milliseconds
+[2026-06-09 10:39:39.349] [12321] [HailoRT] [info] [vdevice.cpp:780] [configure] Configuring HEF on VDevice took 33.397503 milliseconds

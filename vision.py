@@ -386,6 +386,32 @@ def detect_door_cv(img_bgr: np.ndarray) -> dict:
         center_x = (lx + rx) / 2.0
         bright_r = gap_bright / max(sur_bright, 1.0)
 
+        # ── False-positive filters ────────────────────────────────────────────
+
+        # Filter 1: warm-hued content in the gap → separation curtain, not doorway.
+        # Pink/salmon/orange curtains have hue 0–20 or 160–179 (OpenCV 0–179)
+        # with meaningful saturation.
+        gap_region = img_bgr[:, lx:rx]
+        gap_hsv    = cv2.cvtColor(gap_region, cv2.COLOR_BGR2HSV)
+        s_ch = gap_hsv[:, :, 1]
+        hue  = gap_hsv[:, :, 0]
+        warm_mask = (s_ch > 50) & ((hue < 20) | (hue > 160))
+        if float(warm_mask.mean()) > 0.15:
+            return {**null, "notes": "rejected: warm-hued gap (curtain)"}
+
+        # Filter 2: near-horizontal line spanning >40 % of gap width → bench or shelf.
+        gap_edges = edges[:, lx:rx]
+        horiz = cv2.HoughLinesP(
+            gap_edges, rho=1, theta=np.pi / 180, threshold=15,
+            minLineLength=int(gap * 0.40), maxLineGap=8,
+        )
+        if horiz is not None:
+            for (x1h, y1h, x2h, y2h), in horiz:
+                if abs(y2h - y1h) < 20:   # near-horizontal
+                    return {**null, "notes": "rejected: horizontal bar in gap (bench/shelf)"}
+
+        # ─────────────────────────────────────────────────────────────────────
+
         pos = (
             "left"   if center_x < w / 3
             else "right" if center_x > 2 * w / 3

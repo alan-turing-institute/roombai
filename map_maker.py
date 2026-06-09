@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Optional
 
 EVENTS_FILE = Path("/tmp/roomba_events.json")
-MAP_DIR     = Path("/tmp/roomba_maps")
+MAP_DIR     = Path(__file__).parent / "roommap"
 
 # How close (cm) two events of the same label must be before we discard the
 # duplicate.  Keeps the map readable without losing meaningful spread.
@@ -150,7 +150,7 @@ class MapRecorder:
 
         MAP_DIR.mkdir(parents=True, exist_ok=True)
         if out_path is None:
-            ts       = time.strftime("%Y%m%d_%H%M%S")
+            ts       = time.strftime("%Y-%m-%d_%H-%M-%S")
             out_path = str(MAP_DIR / f"map_{ts}.png")
 
         with self._lock:
