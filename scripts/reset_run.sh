@@ -23,8 +23,8 @@ else
     echo "  Claude project memory dir not found — skipping ($CLAUDE_PROJECT_DIR)"
 fi
 
-# 2. Clear everything in /tmp
-find /tmp -mindepth 1 -delete 2>/dev/null || true
+# 2. Clear everything in /tmp (depth-first so dirs are emptied before deletion)
+find /tmp -mindepth 1 -depth -delete 2>/dev/null || true
 echo "✓ Cleared /tmp"
 
 echo ""
