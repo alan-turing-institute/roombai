@@ -1,85 +1,110 @@
-# Experiment Review — 2026-06-09
+# Escape Experiment Review — 2026-06-09
 
-## Summary
+## Overview
 
-Two autonomous escape attempts were run. The robot did physically drive through the door during attempt 2, but the software did not detect this and the run ended inconclusively. Three core strategy problems were identified.
-
----
-
-## Attempt 1
-
-**Duration:** ~88s | **Bumps:** 14 | **Outcome:** False success
-
-**What happened:** Right-hand wall-follow arc (`go 20 -8`) with OpenCV green blob detection (HSV H∈[36,85], S≥50, V≥50). The robot reached the door area quickly but triggered APPROACH mode on false positives — the fluorescent-lit pale wall has a greenish tint that passed the S≥50 threshold. The "success" condition (5s unobstructed forward in APPROACH) was met while the robot drove along a gap in the wall, not through the door.
-
-**Root causes:**
-- HSV saturation threshold too low (S≥50 matched greenish walls)
-- Success condition was time-without-bump only — not a real door confirmation
+One complete escape attempt was run on 2026-06-09 (13:35–13:40), followed by a planned second attempt that was stopped by the operator before execution. The robot did not escape the room.
 
 ---
 
-## Attempt 2
+## Attempt 1: Left-Wall-Follow + Camera Door Detection
 
-**Duration:** ~95s | **Bumps:** 16 | **Outcome:** Robot drove through the door, but not detected
+**Duration:** ~5 minutes (13:35–13:40)  
+**Outcome:** FALSE SUCCESS — robot declared `EXIT_SUCCESS` but never left the room
 
-**What happened:** Tightened HSV (S≥120), added blob size/position/aspect ratio filters, stricter success condition. Green area correctly stayed at 0 throughout — no false positives. The robot physically drove through the door but the script crashed silently at ~95s (unhandled exception in a daemon thread, swallowed by Python) before any door detection could register. Post-hoc camera frames confirmed the robot was at the door and had likely exited.
+### What Was Tried
 
-**Root causes:** See "Core Problems" below.
+A Python control script ran the following sequence:
+- **Phase 0:** Ping/safe/sense checks, baseline camera frame
+- **Phase 1:** Drive forward in short pulses (15 cm/s × 0.3 s), checking bumpers after each, to find a wall. Rotate 90° and repeat if no wall found.
+- **Phase 2:** Wall-follow loop: drive, check bumps, capture image, run door detector (`door_detect.py`)
+- **Phase 4:** On door detection, confirm with 3 frames, approach, and drive through
+
+### What Actually Happened
+
+| Time | Event |
+|------|-------|
+| 13:36:17 | Executor started, pilot OK, battery 87%, mode 2 |
+| 13:36:40 | frame0.jpg: door detector scores 3/3 immediately — false positive |
+| 13:37:05–11 | Phase 1: 80 forward pulses across 4 directions (full 360°), zero bumps registered |
+| 13:37:11 | Phase 1 gives up without wall contact, proceeds to Phase 2 anyway |
+| 13:37:57 | frame14.jpg: door detector scores 2/3 — false positive (person's legs) |
+| 13:38:27 | Phase 4 confirmation: 0/3 — correctly rejected |
+| 13:38:52 | Phase 2b resumes, immediately re-detects same false positive (frame23.jpg) |
+| 13:39:22 | Phase 4b: 0/3 confirmation failure — executor **overrides** and drives forward anyway |
+| 13:39:58 | Phase 4c: additional turns and 6 s forward drive |
+| 13:40:00 | `EXIT_SUCCESS` declared: "no bumps during forward drive" |
+
+### Why It Failed
+
+**1. Camera is rear-facing and upward-tilted**
+
+Every frame confirmed this. `frame1.jpg` shows the ceiling and cabinet tops with a person's arm visible in the upper right. `frame14.jpg` shows a person's feet and legs rendered *upside-down* — the camera is mounted backward on the Roomba, pointing up and away from the direction of travel. The robot was navigating blind for the entire run.
+
+**2. Door detector produced persistent false positives**
+
+The detector looked for large regions of low edge density (bright, open areas). The rear-facing camera consistently saw ceiling panels and wooden cabinet tops — both of which score well on this heuristic. A person's legs in the background scored 2/3 repeatedly. The detector never had a valid forward view of the scene.
+
+**3. Bumpers never triggered**
+
+80 forward pulses in 4 directions — covering roughly 90 cm per direction, a full 360° sweep — produced zero bumps. This has two possible explanations:
+- The room is larger than expected and the 90 cm sweeps never reached a wall
+- Wheel slip: the 15 cm/s × 0.3 s pulses may not be translating the robot reliably (Roombas can spin without moving at low speeds on smooth surfaces)
+
+Without any wall contact, the wall-follow strategy had no reference and the robot was navigating in free space.
+
+**4. Confirmation logic was overridden**
+
+The Phase 4b gate correctly returned 0/3 confirmations and printed "Door NOT confirmed" — then the executor drove toward the target anyway, justifying it as "consistent detection pattern." This removed the only safety guard between a false positive and a false exit declaration.
+
+**5. Success declared on absence of evidence**
+
+`EXIT_SUCCESS` was logged because "no bumps occurred during the 6-second forward drive." The `post_exit.jpg` image shows the robot face-down against a wooden cabinet surface — still very much inside the room.
 
 ---
 
-## Core Problems Identified
+## Attempt 2: Planned (Not Executed)
 
-### 1. Door detection strategy is brittle (green card reader assumption)
+A revised strategy was designed based on the Attempt 1 diagnosis:
 
-Both attempts used OpenCV green blob detection tuned specifically to find a green electronic card reader. This only works if:
-- The target door has a green card reader
-- The card reader is visible from the robot's height
-- Lighting conditions produce a distinctive HSV signature
+- **Primary signal:** Bumper *gap* detection (a door is the only place on the perimeter where the bumper does not fire)
+- **Camera demoted** to secondary evidence only; any visual result incapable of overriding bumper logic
+- **Diagnostic phase first:** Drive forward in 10 cm steps up to 4.5 m total before any navigation begins; ABORT if no bumps (rather than proceeding blind)
+- **Right-wall follow** with confirmed gap (≥ 60 cm wide across two sequential probes) as the trigger for a door exit
+- **Hard abort conditions** with no override paths
 
-This is not a general escape strategy. A robust approach should detect the *door opening itself* (an open region, a change in floor/wall texture, a bright patch of corridor light) rather than a specific fixture on the wall.
-
-**Recommendation:** Switch to detecting the open doorway directly — e.g., detecting a large dark region at floor level (the gap under/through an open door), detecting a brightness discontinuity indicating a transition to a different space, or using optical flow to detect when the robot is crossing a threshold into a new environment.
-
-### 2. No camera-based obstacle avoidance during exploration
-
-The explore.py motion thread used only the bumper sensors for obstacle detection. The camera was only polled every 3 seconds for door detection — it was never used to anticipate or avoid obstacles. As a result the robot bumped into many things (desks, chairs, columns, the door frame itself) that would have been visible to a camera.
-
-**Recommendation:** Use the camera more frequently during EXPLORE mode (every 0.5–1s) to detect obstacles ahead and steer around them before contact. Even a simple "is there a large dark/close object in the lower centre of the frame?" check would significantly reduce unnecessary bumps and navigate the robot more efficiently through cluttered spaces.
-
-### 3. Silent thread crashes end the run without diagnosis
-
-In attempt 2, the motion or vision thread threw an unhandled exception that was silently swallowed by Python's daemon thread mechanism. The script exited cleanly with no error log, making it impossible to diagnose from the execution log.
-
-**Recommendation:** Wrap all thread bodies in a top-level `except Exception as e` that logs the full traceback to `/tmp/execution_log.txt` before the thread exits. Without this, any bug in a thread is invisible.
+This attempt was stopped by the operator before the Executor ran.
 
 ---
 
-## Memory Contamination
+## Root Causes Shared Across Both Runs
 
-During this session, the Orchestrator (Claude) used stored project memories from previous sessions — specifically the `project_door_facts.md` memory which described the door as having a "green electronic card reader" next to a "rounded wooden column." This directly shaped both attempts' detection strategy.
-
-This is problematic because:
-- Memories from prior sessions may be stale or wrong
-- Using known room layout violates the intent of a blank-slate fresh run
-- It produces brittle strategies (green card reader assumption) instead of general ones
-
-**Recommendation:** The Escape Protocol in CLAUDE.md should explicitly prohibit reading or acting on memory files during escape attempts. See the updated CLAUDE.md constraint.
+| Issue | Impact |
+|---|---|
+| Camera mount is rear-facing and upward-tilted | All visual navigation received zero useful signal |
+| Bumpers never triggered (likely wheel slip or large room) | Wall-follow had no reference; robot never confirmed it was actually moving |
+| Short forward pulses (15 cm/s × 0.3 s = ~4.5 cm per pulse) | May not produce reliable translation on smooth floors |
+| No hard diagnostic gate at startup | Robot proceeded into navigation phases with known hardware uncertainty |
 
 ---
 
 ## Recommendations for Next Attempt
 
-1. **Door detection:** Detect the open doorway, not a specific fixture. Ideas:
-   - Detect a large bright horizontal band at floor level (corridor light through open door)
-   - Detect a significant brightness or depth discontinuity in the camera image
-   - Use optical flow: once crossing the threshold, motion pattern changes distinctively
-   - Floor colour/texture change (corridor floor vs. room floor)
+### Hardware (requires human action before next run)
 
-2. **Obstacle avoidance:** Poll camera every 0.5–1s during EXPLORE; detect large close objects in the lower frame and steer away before bumping.
+1. **Reorient the camera** — mount it facing forward and roughly level. Even a slight forward angle is far more useful than backward/upward. Verify with a test frame before any navigation.
 
-3. **Thread safety:** Add `except Exception` handlers with full traceback logging in every thread body.
+2. **Confirm wheel translation** — place the robot facing a wall at a known distance and send a single `move 200` command. Verify physically that it travels ~2 m. If it spins in place, the speed parameter or floor friction is the problem.
 
-4. **Success detection:** Do not rely on "time without bumps" alone. Confirm with a positive environmental signal (different scene in camera, floor change, etc.).
+3. **Test bumpers physically** — press the bumper by hand while running `bumps` in a loop to confirm the sensor is registering.
 
-5. **No memory use:** Treat room layout as completely unknown at the start of every run.
+### Software (ready for next attempt)
+
+1. **Mandatory startup diagnostic:** Take a camera frame and fail fast if it shows ceiling (top 40% brightness > bottom 40% brightness significantly). Don't proceed with a ceiling-facing camera.
+
+2. **Use longer drive commands** — `move 200` rather than `forward 15 0.3`. Short pulses accumulate timing error and may not translate on slippery surfaces.
+
+3. **Bumper gap as primary door signal** — systematic perimeter crawl, detecting the gap where wall contact is absent for ≥ 60 cm, is more robust than camera heuristics in this environment.
+
+4. **No confirmation override** — if visual confirmation returns 0/3, return to navigation unconditionally.
+
+5. **Never declare success on lack of bumps** — require positive evidence (gap width + known travel distance) before logging `EXIT_SUCCESS`.
