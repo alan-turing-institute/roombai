@@ -64,8 +64,9 @@ pub fn get_walls() -> Vec<Segment> {
     walls.push(Segment { p1: pdf_pt(1108.83, 655.03), p2: pdf_pt(1222.74, 655.03) });
     walls.push(Segment { p1: pdf_pt(1108.83, 623.96), p2: pdf_pt(1108.83, 628.51) });
     walls.push(Segment { p1: pdf_pt(1108.83, 648.67), p2: pdf_pt(1108.83, 655.03) });
-    walls.push(Segment { p1: pdf_pt(1003.14, 623.96), p2: pdf_pt(1108.83, 623.96) });
-    walls.push(Segment { p1: pdf_pt(1003.14, 590.46), p2: pdf_pt(1003.14, 623.96) });
+    walls.push(Segment { p1: pdf_pt(1031.84, 623.96), p2: pdf_pt(1108.83, 623.96) });
+    walls.push(Segment { p1: pdf_pt(1003.14, 590.46), p2: pdf_pt(1003.14, 618.48) });
+    walls.push(Segment { p1: pdf_pt(1003.14, 618.48), p2: pdf_pt(1003.14, 623.96) });
     walls.push(Segment { p1: pdf_pt(981.52, 590.46), p2: pdf_pt(1003.14, 590.46) });
     walls.push(Segment { p1: pdf_pt(981.52, 545.99), p2: pdf_pt(981.52, 590.46) });
     walls.push(Segment { p1: pdf_pt(981.52, 545.99), p2: pdf_pt(1003.14, 545.99) });
