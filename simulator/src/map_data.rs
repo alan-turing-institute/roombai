@@ -25,7 +25,8 @@ pub fn get_walls() -> Vec<Segment> {
     walls.push(Segment { p1: pdf_pt(723.42, 838.35), p2: pdf_pt(723.42, 866.63) });
     walls.push(Segment { p1: pdf_pt(723.42, 866.63), p2: pdf_pt(1603.54, 866.63) });
     walls.push(Segment { p1: pdf_pt(1603.54, 744.08), p2: pdf_pt(1603.54, 866.63) });
-    walls.push(Segment { p1: pdf_pt(1333.74, 744.08), p2: pdf_pt(1584.51, 744.08) });
+    walls.push(Segment { p1: pdf_pt(1333.74, 744.08), p2: pdf_pt(1468.64, 744.08) });
+    walls.push(Segment { p1: pdf_pt(1488.64, 744.08), p2: pdf_pt(1584.51, 744.08) });
     walls.push(Segment { p1: pdf_pt(1598.77, 744.08), p2: pdf_pt(1603.54, 744.08) });
     walls.push(Segment { p1: pdf_pt(1277.18, 744.08), p2: pdf_pt(1333.74, 744.08) });
     walls.push(Segment { p1: pdf_pt(1277.18, 744.08), p2: pdf_pt(1278.12, 746.54) });
@@ -1864,11 +1865,13 @@ pub fn get_doors() -> Vec<Door> {
         Door { name: "Door 10".into(), p1: pdf_pt(867.61, 596.31), p2: pdf_pt(867.61, 609.57), is_open: true, is_top_door: false, is_external: false, is_target: false },
         Door { name: "Door 11".into(), p1: pdf_pt(686.51, 622.26), p2: pdf_pt(686.51, 652.97), is_open: true, is_top_door: false, is_external: false, is_target: false },
         Door { name: "Door 12".into(), p1: pdf_pt(867.61, 485.82), p2: pdf_pt(867.61, 499.08), is_open: true, is_top_door: false, is_external: false, is_target: false },
+        // Kitchen door 13
         Door { name: "Door 13".into(), p1: pdf_pt(983.95, 618.48), p2: pdf_pt(1031.84, 618.48), is_open: true, is_top_door: false, is_external: false, is_target: false },
         Door { name: "Door 14".into(), p1: pdf_pt(799.07, 653.47), p2: pdf_pt(812.33, 653.47), is_open: true, is_top_door: false, is_external: false, is_target: false },
         Door { name: "Door 15".into(), p1: pdf_pt(1005.32, 444.87), p2: pdf_pt(1031.84, 444.87), is_open: true, is_top_door: false, is_external: false, is_target: false },
         Door { name: "Door 16".into(), p1: pdf_pt(1166.09, 776.92), p2: pdf_pt(1166.09, 790.18), is_open: false, is_top_door: true, is_external: false, is_target: false },
         Door { name: "Door 17".into(), p1: pdf_pt(1277.28, 747.04), p2: pdf_pt(1277.28, 760.30), is_open: false, is_top_door: true, is_external: false, is_target: false },
+        // Enigma door 18
         Door { name: "Door 18".into(), p1: pdf_pt(1353.78, 736.61), p2: pdf_pt(1385.02, 736.61), is_open: true, is_top_door: false, is_external: false, is_target: false },
         Door { name: "Door 20".into(), p1: pdf_pt(1585.01, 744.08), p2: pdf_pt(1598.27, 744.08), is_open: false, is_top_door: true, is_external: false, is_target: false },
         Door { name: "Door 21".into(), p1: pdf_pt(1277.65, 808.15), p2: pdf_pt(1277.65, 821.41), is_open: false, is_top_door: true, is_external: false, is_target: false },
