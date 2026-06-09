@@ -86,7 +86,7 @@ When asked to escape the room, act as **Orchestrator** and run a subagent team v
 
 **Researcher** — given a question, searches the web for relevant algorithms, open-source libraries, APIs, or techniques and returns a concise findings summary. Called by the Strategist before committing to a plan — never called during active robot motion.
 
-**Strategist** — reads all attempt review files, calls Researcher as needed to inform its approach, then proposes the *simplest viable strategy not yet tried*, with explicit success criteria and abort conditions.
+**Strategist** — reads any attempt review files, calls Researcher as needed to inform its approach, then proposes the *simplest viable strategy not yet tried*, with explicit success criteria and abort conditions.
 
 **Executor** — implements the strategy via pilot commands and active camera use. Writes observations to `/tmp/execution_log.txt` as it goes. Runs until success, abort condition, or time limit.
 
@@ -94,15 +94,3 @@ When asked to escape the room, act as **Orchestrator** and run a subagent team v
 
 **Loop:** Strategist (+ Researcher) → [Executor ∥ Critic] → if ABANDON/ITERATE, return Critic's diagnosis to Strategist → repeat. Write a new `attempt_N_review.md` after each run.
 
----
-
-## Attempt history
-
-Read these before strategising, but bear in mind that all these attempts demonstrate very slow, poorly strategised, and unsuccessful attempts.
-
-- `attempt_1_review.md`
-- `attempt_2_review.md`
-- `attempt_4_review.md`
-- `attempt_5_review.md`
-
----
