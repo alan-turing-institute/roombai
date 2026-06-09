@@ -25,10 +25,8 @@ pub fn get_walls() -> Vec<Segment> {
     walls.push(Segment { p1: pdf_pt(723.42, 838.35), p2: pdf_pt(723.42, 866.63) });
     walls.push(Segment { p1: pdf_pt(723.42, 866.63), p2: pdf_pt(1603.54, 866.63) });
     walls.push(Segment { p1: pdf_pt(1603.54, 744.08), p2: pdf_pt(1603.54, 866.63) });
-    // Split wall to create opening for Enigma exit door
     walls.push(Segment { p1: pdf_pt(1333.74, 744.08), p2: pdf_pt(1353.78, 744.08) });
     walls.push(Segment { p1: pdf_pt(1385.02, 744.08), p2: pdf_pt(1584.51, 744.08) });
-
     walls.push(Segment { p1: pdf_pt(1598.77, 744.08), p2: pdf_pt(1603.54, 744.08) });
     walls.push(Segment { p1: pdf_pt(1277.18, 744.08), p2: pdf_pt(1333.74, 744.08) });
     walls.push(Segment { p1: pdf_pt(1277.18, 744.08), p2: pdf_pt(1278.12, 746.54) });
@@ -1848,8 +1846,8 @@ pub fn get_walls() -> Vec<Segment> {
     walls.push(Segment { p1: pdf_pt(1290.85, 798.87), p2: pdf_pt(1291.33, 798.87) });
     walls.push(Segment { p1: pdf_pt(1291.33, 796.93), p2: pdf_pt(1289.77, 798.87) });
     walls.push(Segment { p1: pdf_pt(1289.66, 796.93), p2: pdf_pt(1289.77, 796.89) });
-    walls.push(Segment { p1: pdf_pt(1256.64, 714.48), p2: pdf_pt(1269.90, 714.48) }); // Replaced Door 19
-    walls.push(Segment { p1: pdf_pt(1108.70, 629.01), p2: pdf_pt(1108.70, 648.17) }); // Replaced Door 29
+    walls.push(Segment { p1: pdf_pt(1256.64, 714.48), p2: pdf_pt(1269.90, 714.48) });
+    walls.push(Segment { p1: pdf_pt(1108.70, 629.01), p2: pdf_pt(1108.70, 648.17) });
     walls
 }
 
