@@ -1,0 +1,11 @@
+# Pi SSH target — fill in your Pi's address, do not commit
+.pi_host
+
+# Runtime artefacts
+__pycache__/
+*.pyc
+*.pyo
+hailort*.log
+
+# Hailo compilation workspace
+/usr/share/hailo-models/_compile_tmp/
