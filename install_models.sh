@@ -15,6 +15,9 @@
 #
 set -uo pipefail   # no -e so individual failures don't abort the whole script
 
+# ── Activate Python virtual environment ───────────────────────────────────────
+source ~/yolo_new/bin/activate
+
 MODEL_DIR="/usr/share/hailo-models"
 HW_ARCH="hailo8l"
 

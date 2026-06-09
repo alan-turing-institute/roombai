@@ -13,6 +13,9 @@
 #
 set -euo pipefail
 
+# ── Activate Python virtual environment ───────────────────────────────────────
+source ~/yolo_new/bin/activate
+
 # ── Resolve repo root (works regardless of cwd) ───────────────────────────────
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PILOT_BIN="$REPO_DIR/roomba_pilot/target/debug/pilot"

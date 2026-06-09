@@ -52,17 +52,21 @@ git rev-parse --abbrev-ref HEAD
 SSH to the Pi and, **before switching branches**, commit any uncommitted
 changes there so nothing is lost:
 ```
-ssh <pi_host> "cd /home/hackweek26/roombai \
-  && git diff --quiet && git diff --cached --quiet \
-  || git add -A && git commit -m 'Pi pre-switch commit $(date +%Y-%m-%d_%H:%M)'"
+sshpass -p aipi ssh -o StrictHostKeyChecking=no <pi_host> \
+  "source ~/yolo_new/bin/activate \
+   && cd /home/hackweek26/roombai \
+   && git diff --quiet && git diff --cached --quiet \
+   || git add -A && git commit -m 'Pi pre-switch commit $(date +%Y-%m-%d_%H:%M)'"
 ```
 
 Then switch to the correct branch and pull:
 ```
-ssh <pi_host> "cd /home/hackweek26/roombai \
-  && git fetch origin \
-  && git checkout <local_branch> \
-  && git pull --ff-only origin <local_branch>"
+sshpass -p aipi ssh -o StrictHostKeyChecking=no <pi_host> \
+  "source ~/yolo_new/bin/activate \
+   && cd /home/hackweek26/roombai \
+   && git fetch origin \
+   && git checkout <local_branch> \
+   && git pull --ff-only origin <local_branch>"
 ```
 
 If the pull fails for any reason (diverged history, merge conflict, etc.)
@@ -70,17 +74,21 @@ report the full error and stop — do not proceed with a mismatched codebase.
 
 ### 4. Clear /tmp/ on the Pi
 
-Stop any leftover processes from previous runs, then wipe /tmp/ for a
-clean slate:
+Stop any leftover processes from previous runs, then remove roomba-owned
+/tmp/ files (system files are left untouched):
 
 ```
-ssh <pi_host> "pkill -f explore.py 2>/dev/null; pkill -f speak_queue 2>/dev/null; sleep 1; rm -rf /tmp/*"
+sshpass -p aipi ssh -o StrictHostKeyChecking=no <pi_host> \
+  "pkill -f explore.py 2>/dev/null; pkill -f speak_queue 2>/dev/null; sleep 1; \
+   rm -rf /tmp/roomba_* /tmp/roomba_frames /tmp/roomba_maps \
+          /tmp/pilot.log /tmp/speak_* /tmp/sync_stop"
 ```
 
-### 5. Ensure run.sh is executable on the Pi
+### 5. Ensure scripts are executable on the Pi
 
 ```
-ssh <pi_host> "chmod +x /home/hackweek26/roombai/run.sh /home/hackweek26/roombai/install_models.sh"
+sshpass -p aipi ssh -o StrictHostKeyChecking=no <pi_host> \
+  "chmod +x /home/hackweek26/roombai/run.sh /home/hackweek26/roombai/install_models.sh"
 ```
 
 ### 6. Create the local run directory and start the live sync
@@ -103,10 +111,11 @@ echo "[run] live sync started (PID $SYNC_PID) → $RUN_DIR"
 
 ### 7. Execute run.sh on the Pi (background so sync keeps running)
 
-Run the SSH session **in the background** so the sync loop continues in parallel:
+Run the SSH session **in the background** so the sync loop continues in parallel.
+Always activate the venv first:
 ```
 sshpass -p aipi ssh -o StrictHostKeyChecking=no -tt <pi_host> \
-    "bash /home/hackweek26/roombai/run.sh $ARGUMENTS" &
+    "source ~/yolo_new/bin/activate && bash /home/hackweek26/roombai/run.sh $ARGUMENTS" &
 SSH_PID=$!
 echo "[run] SSH session started (PID $SSH_PID)"
 ```
