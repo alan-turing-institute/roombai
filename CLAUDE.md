@@ -51,7 +51,7 @@ Default port: `127.0.0.1:9999`. The robot **must be powered on before the daemon
 
 ### Camera
 
-`rpicam-still` and `rpicam-hello` can be used to capture still or video, respectively.
+`rpicam-still` and `rpicam-hello` can be used to capture still or video, respectively. Please note that the camera is mounted upside down.
 
 #### Frame recording during escape attempts
 
