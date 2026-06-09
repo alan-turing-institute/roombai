@@ -26,6 +26,7 @@ STRATEGY FILE  /tmp/roomba_strategy.json
 import argparse
 import json
 import math
+import multiprocessing as mp
 import queue
 import random
 import shutil
@@ -43,9 +44,6 @@ from map_maker import MapRecorder
 from model_setup import ensure_models
 from vision import (
     OdometryTracker,
-    MODELS_AVAILABLE,
-    analyze_scene,
-    init_all_models,
     yolo_labels,
 )
 
@@ -100,6 +98,129 @@ _state: dict = {
 
 odom         = OdometryTracker()
 map_recorder = MapRecorder()
+
+
+# ── Vision child-process worker ───────────────────────────────────────────────
+# Must be a module-level function (not nested) so multiprocessing can pickle it.
+
+def _vision_worker(req_q: mp.Queue, res_q: mp.Queue) -> None:
+    """
+    Child process: load all vision models once, then serve frames indefinitely.
+
+    Protocol:
+      startup  → res_q.put({"__ready__": True, "available": {...}})
+               | res_q.put({"__error__": "..."})  on init failure
+      per frame: req_q.get() → (curr_img, prev_img | None, baseline_cm)
+               → res_q.put(scene_dict)
+               | res_q.put({"__error__": "..."})
+      shutdown: req_q.put(None) → process exits cleanly
+    """
+    from vision import MODELS_AVAILABLE, analyze_scene, init_all_models
+    try:
+        init_all_models()
+    except Exception as e:
+        res_q.put({"__error__": f"model init: {e}"})
+        return
+    res_q.put({"__ready__": True, "available": dict(MODELS_AVAILABLE)})
+
+    while True:
+        item = req_q.get()
+        if item is None:
+            break
+        curr_img, prev_img, baseline_cm = item
+        try:
+            scene = analyze_scene(curr_img, prev_img=prev_img, baseline_cm=baseline_cm)
+            res_q.put(scene)
+        except Exception as e:
+            res_q.put({"__error__": str(e)})
+
+
+class VisionProcess:
+    """
+    Wraps analyze_scene() in a child process so a hung Hailo inference can be
+    truly killed (SIGKILL) rather than merely timed-out at the thread level.
+
+    On a 3 s timeout the child is SIGKILLed and a fresh process is spawned;
+    vision models reload in the new child (~5–15 s) before the next result
+    is returned.  Frames captured during respawn are skipped but the camera
+    loop keeps ticking uninterrupted.
+    """
+    INFER_TIMEOUT  = 3.0    # seconds per frame before declaring a hang
+    READY_TIMEOUT  = 60.0   # seconds to wait for model load on (re)start
+
+    def __init__(self) -> None:
+        self._proc: mp.Process | None = None
+        self._req:  mp.Queue   | None = None
+        self._res:  mp.Queue   | None = None
+        self._spawn()
+
+    def _spawn(self) -> None:
+        self._req = mp.Queue(maxsize=1)
+        self._res = mp.Queue(maxsize=1)
+        self._proc = mp.Process(
+            target=_vision_worker,
+            args=(self._req, self._res),
+            daemon=True,
+            name="vision-worker",
+        )
+        self._proc.start()
+        # log() is not available yet at module-init time; print is fine here.
+        print(f"[VISION] worker spawned PID={self._proc.pid} — waiting for models…",
+              flush=True)
+        try:
+            msg = self._res.get(timeout=self.READY_TIMEOUT)
+        except Exception:
+            print("[VISION] worker did not become ready in time", flush=True)
+            return
+        if msg.get("__ready__"):
+            avail   = msg.get("available", {})
+            loaded  = [k for k, v in avail.items() if v]
+            missing = [k for k, v in avail.items() if not v]
+            print(f"[VISION] worker ready  loaded={loaded}  missing={missing}", flush=True)
+        else:
+            print(f"[VISION] worker init error: {msg.get('__error__')}", flush=True)
+
+    def _kill_and_respawn(self) -> None:
+        try:
+            if self._proc and self._proc.is_alive():
+                self._proc.kill()
+                self._proc.join(timeout=2.0)
+        except Exception:
+            pass
+        self._spawn()
+
+    def analyze(
+        self,
+        curr_img: np.ndarray,
+        prev_img: "np.ndarray | None",
+        baseline_cm: float,
+    ) -> "dict | None":
+        if not (self._proc and self._proc.is_alive()):
+            log("[VISION] worker died — respawning")
+            speak("Vision worker crashed. Restarting.")
+            self._spawn()
+
+        try:
+            self._req.put_nowait((curr_img, prev_img, baseline_cm))
+        except Exception:
+            log("[VISION] request queue full — worker still busy, skipping frame")
+            return None
+
+        try:
+            result = self._res.get(timeout=self.INFER_TIMEOUT)
+        except Exception:
+            log(f"[VISION] {self.INFER_TIMEOUT:.0f}s timeout — killing worker and respawning")
+            speak("Vision timeout. Restarting vision worker.")
+            self._kill_and_respawn()
+            return None
+
+        if "__error__" in result:
+            log(f"[VISION] worker error: {result['__error__']}")
+            return None
+        return result
+
+
+_vision: VisionProcess | None = None
 
 # ── Human greeting ────────────────────────────────────────────────────────────
 _greet_humans     = False          # set to True by --greet flag
@@ -267,9 +388,12 @@ def camera_thread():
                 curr_odom[1] - prev_odom[1],
             )
 
-        # ── Run all vision models (YOLO-det, YOLO-seg, fast_depth, Fast-SCNN, DeepLabV3+,
-        #    optical flow, OpenCV door detection) and fuse into one scene dict ──
-        scene = analyze_scene(curr_img, prev_img=prev_img, baseline_cm=baseline_cm)
+        # ── Vision inference in child process (3 s timeout; kill on hang) ──
+        scene = _vision.analyze(curr_img, prev_img, baseline_cm)
+        if scene is None:
+            prev_img  = curr_img    # keep prev_img current for next frame's flow
+            prev_odom = curr_odom
+            continue
 
         prev_img  = curr_img
         prev_odom = curr_odom
@@ -791,14 +915,13 @@ def main():
             "mode": "EXPLORE", "door_bearing": None, "notes": "initial"
         }, indent=2))
 
-    # ── Load verified models into Hailo VDevice ───────────────────────────────
-    available = init_all_models()
-    loaded  = [k for k, v in available.items() if v]
-    missing = [k for k, v in available.items() if not v]
-    log(f"Models loaded:  {loaded}")
-    log(f"Models missing: {missing} (OpenCV door detection always runs)")
-    if missing:
-        speak(f"{len(missing)} vision models unavailable. Running with available models.")
+    # ── Spawn vision child process (loads models; logs loaded/missing itself) ──
+    # Models are loaded inside the child so the main process never touches the
+    # Hailo VDevice — avoids PCIe resource conflicts if the child is restarted.
+    global _vision
+    speak("Spawning vision worker.")
+    _vision = VisionProcess()
+    speak("Vision worker ready.")
 
     threads = [
         threading.Thread(target=_log_writer,         daemon=True, name="log"),
