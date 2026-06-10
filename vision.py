@@ -56,6 +56,9 @@ CHAIR_PAIR_MAX_CM = 80.0    # real-world gap below which two legs are treated as
 LEG_MAX_DIST_CM   = 200.0   # don't block navigation for legs further than this
 STUCK_BASELINE_CM = 20.0
 STUCK_FLOW_PX     = 3.0
+TEXTURE_MIN_VAR   = 80.0   # Laplacian variance below which a region is treated as textureless
+                            # (blank wall / whiteboard). open_space is scaled by var/TEXTURE_MIN_VAR
+                            # so a wall with var=15 gives confidence≈0.19, suppressing false "open".
 
 # ── Blind-spot / obstacle memory constants ────────────────────────────────────
 BLIND_SPOT_CM     = 43.0   # closest floor point visible from camera (horizontal, 20cm height)
@@ -928,20 +931,43 @@ def _parse_fast_depth(depth_m: np.ndarray, orig_w: int, orig_h: int) -> np.ndarr
 
 
 # ── Open-space analysis from depth map ───────────────────────────────────────
-def _open_space_from_depth(depth_map: np.ndarray) -> dict:
+def _open_space_from_depth(depth_map: np.ndarray,
+                           img_bgr: np.ndarray | None = None) -> dict:
     """
-    Fraction of far pixels (potential open space / doorway) in each frame third.
-    Returns {"left": float, "center": float, "right": float} in [0, 1].
+    Fraction of far pixels (potential open space / doorway) in each frame third,
+    soft-scaled by per-third texture confidence.
+
+    A blank, textureless region (low Laplacian variance) is likely a wall that
+    fast_depth misreads as far.  Texture confidence = min(1, var / TEXTURE_MIN_VAR)
+    suppresses the open_space score without hard-blocking it.
+
+    img_bgr is optional; when absent, texture gating is skipped.
     """
     threshold = float(np.percentile(depth_map, 40))   # low inv-depth = far
     far   = depth_map <= threshold
-    w     = depth_map.shape[1]
+    h, w  = depth_map.shape[:2]
     third = w // 3
-    return {
-        "left":   float(far[:, :third].mean()),
-        "center": float(far[:, third:2 * third].mean()),
-        "right":  float(far[:, 2 * third:].mean()),
+    slices = {
+        "left":   (slice(None), slice(0, third)),
+        "center": (slice(None), slice(third, 2 * third)),
+        "right":  (slice(None), slice(2 * third, w)),
     }
+
+    result: dict[str, float] = {}
+    for side, (rs, cs) in slices.items():
+        raw = float(far[rs, cs].mean())
+
+        if img_bgr is not None:
+            # Compute Laplacian variance on the grayscale region to measure texture.
+            region = img_bgr[rs, cs]
+            gray   = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+            lap_var = float(cv2.Laplacian(gray.astype(np.float32), cv2.CV_32F).var())
+            confidence = min(1.0, lap_var / TEXTURE_MIN_VAR)
+            result[side] = raw * confidence
+        else:
+            result[side] = raw
+
+    return result
 
 
 # ── Obstacle analysis ─────────────────────────────────────────────────────────
@@ -1412,9 +1438,9 @@ def analyze_scene(
                 flush=True,
             )
 
-    # 5. Open-space map from depth
+    # 5. Open-space map from depth, texture-gated to suppress blank walls
     open_space = (
-        _open_space_from_depth(depth_map)
+        _open_space_from_depth(depth_map, img_bgr)
         if depth_map is not None
         else {"left": 0.0, "center": 0.0, "right": 0.0}
     )
