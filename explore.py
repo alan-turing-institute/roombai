@@ -61,7 +61,7 @@ FRAME_INTERVAL  = 0.5   # seconds between camera captures
 MIN_MOVE_CM     = 2.0   # minimum translation since last photo — skip if less
 MIN_TURN_DEG    = 10.0  # minimum heading change since last photo — skip if less
 MOVE_SPEED      = 15    # cm/s forward speed
-MOVE_BURST      = 3.0   # seconds per forward burst
+MOVE_BURST      = 6.0   # seconds per forward burst
 SCAN_ROCK_CM    = 20    # forward distance (cm) rocked at each scan heading for flow depth
 SCAN_WAIT_S     = 2.0   # seconds to wait at each scan heading for a fresh frame
                          # = FRAME_INTERVAL + capture(0.8s) + analysis(0.5s) + margin
@@ -74,8 +74,8 @@ DOOR_SLOW_BURST     = 1.0      # forward burst (s) when door hit in current wind
 
 CORNER_PROGRESS_CM  = 35   # min displacement (cm) between bumps to reset corner counter
 CORNER_ESCAPE_BUMPS = 3    # consecutive stuck bumps before executing corner escape
-SCAN_EVERY_BUMPS = 3           # pause for a 360° scan every N bumps
-SCAN_EVERY_CM    = 300         # also scan every N cm of odometry travel
+SCAN_EVERY_BUMPS = 6           # pause for a 360° scan every N bumps
+SCAN_EVERY_CM    = 500         # also scan every N cm of odometry travel
 MAP_SAVE_INTERVAL = 30         # seconds between periodic map saves
 APPROACH_SLOW_DIST  = 150  # cm — half-speed below this
 APPROACH_STOP_DIST  = 40   # cm — stop and declare arrival
@@ -623,6 +623,7 @@ def mover_thread():
     _bumps_since_scan  = 0
     _last_scan_x       = 0.0   # odometry position at the last 360° scan
     _last_scan_y       = 0.0
+    _visited_sectors: set[int] = set()   # 45° heading sectors already driven
     # Corner escape state
     _default_turn_sign = -1    # -1=CW, +1=CCW; flips each time it's used with no depth preference
     _corner_bump_count = 0     # bumps without CORNER_PROGRESS_CM of displacement
@@ -740,6 +741,7 @@ def mover_thread():
           Frame B  — stationary at X+rock, heading H  → flow A→B depth ✓
           Return via do_reverse_safe(skip_check=True) — path is clear.
         """
+        _visited_sectors.clear()   # fresh scan resets coverage memory
         use_rock = state_get("scene_depth_cm") is None
         if use_rock:
             log(f"[MOVER] SCAN: 360° depth scan with ±{SCAN_ROCK_CM} cm rock "
@@ -809,8 +811,21 @@ def mover_thread():
         if or_ > ol + 0.05:
             return -40.0
 
-        # No clear preference — turn 90° CW (consistent wall-following)
-        return -90.0
+        # ── 4. Prefer unvisited heading sectors ──────────────────────────────
+        # Avoid circling the same area: if one turn leads to a sector not yet
+        # driven, favour that direction over the alternating default.
+        if len(_visited_sectors) < 8:
+            left_sector  = int((odom.heading + 60) / 45) % 8
+            right_sector = int((odom.heading - 60) / 45) % 8
+            l_new = left_sector  not in _visited_sectors
+            r_new = right_sector not in _visited_sectors
+            if l_new and not r_new:
+                return 60.0
+            if r_new and not l_new:
+                return -60.0
+
+        # No clear preference — alternate CW/CCW
+        return 90.0 * _default_turn_sign
 
     speak("Beginning room exploration.")
     log("[MOVER] starting pos=(0,0) heading=0°")
@@ -875,7 +890,14 @@ def mover_thread():
             state_set(stuck=False)
             if _consecutive_stuck >= 3:
                 _consecutive_stuck = 0
-                state_set(mode="EXPLORE")
+                # In APPROACH with a known bearing, do a big push rather than
+                # abandoning — the door is still out there.
+                if mode == "APPROACH" and state_get("door_bearing") is not None:
+                    log("[MOVER] stuck in APPROACH — wide detour, keeping bearing")
+                    speak("Stuck approaching door. Trying wide detour.")
+                    do_forward(MOVE_SPEED, 80.0 / MOVE_SPEED)
+                else:
+                    state_set(mode="EXPLORE")
             continue
         else:
             _consecutive_stuck = 0
@@ -1076,7 +1098,17 @@ def mover_thread():
                     open_space = state_get("open_space") or {}
                     ol2  = open_space.get("left",  0.0)
                     or2_ = open_space.get("right", 0.0)
-                    if ol2 > or2_ + DEPTH_SIDE_MARGIN:
+                    left_sec  = int((odom.heading + 90) / 45) % 8
+                    right_sec = int((odom.heading - 90) / 45) % 8
+                    l_new = left_sec  not in _visited_sectors
+                    r_new = right_sec not in _visited_sectors
+                    if l_new and not r_new:
+                        turn_deg = +90.0
+                        dir_str  = "left (unvisited)"
+                    elif r_new and not l_new:
+                        turn_deg = -90.0
+                        dir_str  = "right (unvisited)"
+                    elif ol2 > or2_ + DEPTH_SIDE_MARGIN:
                         turn_deg = +90.0
                         dir_str  = "left (depth)"
                     elif or2_ > ol2 + DEPTH_SIDE_MARGIN:
@@ -1101,12 +1133,15 @@ def mover_thread():
                     do_scan_360()
 
             else:
-                # Clean burst — check distance-based scan trigger
+                # Clean burst — mark this heading sector as visited
+                _visited_sectors.add(int(odom.heading / 45) % 8)
+
+                # Check distance-based scan trigger
                 dist_from_scan = math.hypot(odom.x - _last_scan_x,
                                             odom.y - _last_scan_y)
                 if dist_from_scan >= SCAN_EVERY_CM:
                     log(f"[MOVER] distance scan: {dist_from_scan:.0f}cm since last scan")
-                    speak("Scanning after travelling three metres.")
+                    speak("Scanning after travelling five metres.")
                     _last_scan_x, _last_scan_y = odom.x, odom.y
                     _bumps_since_scan = 0
                     do_scan_360()
