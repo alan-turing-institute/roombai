@@ -34,6 +34,7 @@ _DOOR_YOLO_SIZE  = 640
 FOCAL_PX          = 492.0
 DOOR_WIDTH_CM     = 80.0
 CAMERA_HEIGHT_CM  = 20.0     # camera is ~20 cm off the floor
+ROBOT_WIDTH_CM    = 40.0     # Roomba diameter ≈ 2 × camera height
 OBSTACLE_BLOCK_DIST_CM = 200.0
 STUCK_BASELINE_CM = 20.0
 STUCK_FLOW_PX     = 3.0
@@ -647,6 +648,14 @@ def analyze_obstacles(
             blocked[det["position"]] = True
             if dist is not None and (nearest_cm is None or dist < nearest_cm):
                 nearest_cm = dist
+            # Lateral clearance: if the gap between this obstacle and the frame
+            # edge is narrower than the robot, that side is also impassable.
+            if dist and dist > 0:
+                robot_px = ROBOT_WIDTH_CM * FOCAL_PX / dist
+                if x1 < robot_px:           # not enough room on the left
+                    blocked["left"] = True
+                if (frame_w - x2) < robot_px:  # not enough room on the right
+                    blocked["right"] = True
 
     clear_path: str | None = None
     for c in ("center", "right", "left"):
@@ -760,7 +769,7 @@ def detect_door_cv(
         gap_real_cm: float | None = None
         if scene_depth_cm is not None and scene_depth_cm > 0:
             gap_real_cm = round(gap * scene_depth_cm / FOCAL_PX, 1)
-            if not (50 < gap_real_cm < 150):
+            if not (ROBOT_WIDTH_CM < gap_real_cm < 150):
                 return {**null, "notes": f"rejected: gap real width {gap_real_cm:.0f} cm (not door-sized)"}
 
         # Filter 4: fast_depth — gap should be further (lower inv-depth) than surroundings
