@@ -24,7 +24,7 @@ use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use roomba_pilot::protocol::RADIUS_STRAIGHT;
+use roomba_pilot::protocol::{RADIUS_CCW, RADIUS_STRAIGHT};
 use serde_json::{json, Value};
 
 use crate::logger::Logger;
@@ -402,6 +402,74 @@ pub fn floor_traverse<T: Read + Write>(ctx: &mut Ctx<T>, caps: &Caps) {
     ctx.results.push(json!({
         "phase": "floor",
         "legs": [out.to_json("floor_out"), arc.to_json("floor_arc"), ret.to_json("floor_return")],
+    }));
+}
+
+// ---- S2: square drive (rotation calibration) ---------------------------------
+//
+// Drive a 1 m square: four equal sides with a 90° CCW turn between each. If the
+// turns are truly 90° the robot returns to its start point regardless of the
+// exact side length — so the home-return error isolates rotation accuracy. S1
+// showed the encoder OVER-reports rotation (a commanded full turn physically
+// swept only ~320°), so each turn here stops when the encoder reads
+// 90 * TURN_ENC_PER_REAL_DEG, i.e. it deliberately lets the encoder run past 90
+// to land a true 90. Measure the residual home offset to refine the factor.
+
+/// Encoder-degrees logged per real degree of body rotation, from S1: the spins
+/// stopped at ~359° encoder having physically turned ~320°. Edit this after
+/// measuring S2's home offset to re-tune (larger -> turns further per corner).
+const TURN_ENC_PER_REAL_DEG: f64 = 359.0 / 320.0; // ≈ 1.122
+
+pub fn square_run<T: Read + Write>(ctx: &mut Ctx<T>, caps: &Caps) {
+    let turn_target = 90.0 * TURN_ENC_PER_REAL_DEG;
+    ctx.announce(
+        "square",
+        &format!(
+            "S2. Driving a 1 metre square. Four 90 degree left turns, stopping each at {:.0} encoder degrees.",
+            turn_target
+        ),
+    );
+    let turn_vel = (45.0_f64.to_radians() * HALF_SPAN_MM) as i16; // 45 deg/s, the clean spin rate
+    let mut legs = Vec::new();
+
+    for corner in 0..4 {
+        if ctx.aborted() {
+            break;
+        }
+        // Side: 1 m forward. Bumping anything means the square is compromised —
+        // stop the test rather than grind on and report a meaningless offset.
+        let side_label = format!("sq_side_{}", corner + 1);
+        ctx.announce("square", &format!("Side {}.", corner + 1));
+        let side = drive_until(ctx, caps, &side_label, 150, RADIUS_STRAIGHT, Duration::from_secs(12), true, |p| {
+            p.dist_mm >= 1000.0
+        });
+        legs.push(side.to_json(&side_label));
+        if side.reason == StopReason::Bump {
+            ctx.announce("square", &format!("Bump on side {}. Aborting square; clear the lane and rerun.", corner + 1));
+            break;
+        }
+        ctx.sleep(Duration::from_millis(700)); // settle for a clean corner on video
+
+        if ctx.aborted() {
+            break;
+        }
+        let turn_label = format!("sq_turn_{}", corner + 1);
+        ctx.announce("square", &format!("Turn {}.", corner + 1));
+        let turn = drive_until(ctx, caps, &turn_label, turn_vel, RADIUS_CCW, Duration::from_secs(8), false, |p| {
+            p.angle_deg >= turn_target
+        });
+        legs.push(turn.to_json(&turn_label));
+        ctx.sleep(Duration::from_millis(700));
+    }
+
+    ctx.announce("square", "Square complete. Stopped at the start point. Measure the offset from home.");
+    ctx.results.push(json!({
+        "phase": "square",
+        "side_mm": 1000.0,
+        "turn_deg": 90.0,
+        "turn_enc_per_real_deg": TURN_ENC_PER_REAL_DEG,
+        "turn_target_enc_deg": turn_target,
+        "legs": legs,
     }));
 }
 

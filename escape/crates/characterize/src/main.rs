@@ -31,10 +31,11 @@ struct Opts {
     camera: bool,
     step: bool,
     from: char, // first phase to run: A..E (resume aid if the runner is restarted mid-session)
+    square: bool, // S2: run only the square-drive rotation test instead of A..D
 }
 
 fn usage() -> ! {
-    eprintln!("usage: characterize --out DIR [--port /dev/ttyUSB0] [--dry-run] [--skip-camera] [--step] [--from A|B|C|D]");
+    eprintln!("usage: characterize --out DIR [--port /dev/ttyUSB0] [--dry-run] [--skip-camera] [--step] [--from A|B|C|D] [--square]");
     std::process::exit(2);
 }
 
@@ -42,6 +43,7 @@ fn parse_args() -> Opts {
     let mut port = "/dev/ttyUSB0".to_string();
     let mut out = None;
     let (mut dry_run, mut camera, mut step, mut from) = (false, true, false, 'A');
+    let mut square = false;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -49,6 +51,7 @@ fn parse_args() -> Opts {
             "--out" => out = Some(PathBuf::from(it.next().unwrap_or_else(|| usage()))),
             "--dry-run" => dry_run = true,
             "--skip-camera" => camera = false,
+            "--square" => square = true,
             "--step" => step = true,
             "--from" => {
                 let p = it.next().unwrap_or_else(|| usage());
@@ -60,7 +63,7 @@ fn parse_args() -> Opts {
             _ => usage(),
         }
     }
-    Opts { port, out: out.unwrap_or_else(|| usage()), dry_run, camera: camera && !dry_run, step, from }
+    Opts { port, out: out.unwrap_or_else(|| usage()), dry_run, camera: camera && !dry_run, step, from, square }
 }
 
 fn main() {
@@ -113,18 +116,27 @@ fn run<T: Read + Write>(rig: Rig<T>, opts: Opts, abort: Arc<AtomicBool>) {
         phases::sync_pulse(&mut ctx, &caps);
     }
 
-    let run_phase = |c: char| opts.from <= c;
-    ctx.pause_if_step();
-    if run_phase('B') && !ctx.aborted() {
-        phases::wall_run(&mut ctx, &caps);
-    }
-    ctx.pause_if_step();
-    if run_phase('C') && !ctx.aborted() {
-        phases::rotation(&mut ctx, &caps);
-    }
-    ctx.pause_if_step();
-    if run_phase('D') && !ctx.aborted() {
-        phases::floor_traverse(&mut ctx, &caps);
+    if opts.square {
+        // S2: just the square-drive rotation test (sync pulse above still ran,
+        // so this video aligns to the encoder log the same way S1 does).
+        ctx.pause_if_step();
+        if !ctx.aborted() {
+            phases::square_run(&mut ctx, &caps);
+        }
+    } else {
+        let run_phase = |c: char| opts.from <= c;
+        ctx.pause_if_step();
+        if run_phase('B') && !ctx.aborted() {
+            phases::wall_run(&mut ctx, &caps);
+        }
+        ctx.pause_if_step();
+        if run_phase('C') && !ctx.aborted() {
+            phases::rotation(&mut ctx, &caps);
+        }
+        ctx.pause_if_step();
+        if run_phase('D') && !ctx.aborted() {
+            phases::floor_traverse(&mut ctx, &caps);
+        }
     }
     cam.stop_video();
 
