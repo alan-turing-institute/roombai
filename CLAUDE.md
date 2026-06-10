@@ -146,7 +146,9 @@ Use this loop only at route gates, not after every tiny movement. Route gates ar
 
 - Enter SAFE mode.
 - Capture first frame; locate door opening and estimate Roomba heading.
-- Pick a target point: the centre of the doorway, biased slightly toward the wider-clearance side if obstacles crowd the centreline.
+- **If the first frame does not show the full room** (e.g. robot is facing a wall or corner), back off 30 cm and do a `turn 180` before recapturing — do not waste frames on close-up wall shots.
+- **If no obvious door opening is visible from the first usable frame**, do a deliberate 360° survey: issue four `turn 90` commands, capturing a frame after each, before committing to any direction. Do this once at the start — do not repeat it mid-run.
+- Once the door is located: pick a target point at the centre of the doorway, biased slightly toward the wider-clearance side if obstacles crowd the centreline.
 - Compute angle delta to face that target.
 - Issue a single `turn <deg>` to align (+CCW / -CW). If the estimate is uncertain by > 20°, still make the best turn estimate and continue; do not spend multiple frames perfecting orientation unless the first frame is unusable.
 
@@ -187,6 +189,8 @@ Avoid moves below 80 cm until Phase 3 unless recovering from a bump or threading
 ### Phase 3 — Thread the door (last ~1 m)
 
 - Capture once and confirm the robot is facing the door opening, not the wall beside it.
+- **The exit opening is to the LEFT of the wooden board/panel** — the board itself is a wall, not a door. The passable gap is the floor-level opening immediately to the left of it, where the carpet continues through. Do not target the board face; target the gap beside it.
+- More generally: the exit may not look like a traditional hinged door. Look for any floor-level gap or opening next to a wall feature — the passable route is wherever the floor continues unobstructed into the next space. If you see a large flat panel (wood, board, partition), always check both sides before concluding the wall is solid.
 - Align to the door centreline. At the threshold, being centred matters more than being perfectly square.
 - Use short, deliberate moves, but do not stop between them if the first threshold push is clean:
 
@@ -215,6 +219,8 @@ source ./scripts/capture_frame.sh                    # re-assess from image
 - Right bump only: `turn 35` to `turn 60` (turn left), depending on available clearance.
 - Both bumps: back off 25-35 cm, capture, then turn toward the largest visible free space that still moves toward the door.
 - If bumped in the doorway, do not make a large 90° turn. Back off 15-20 cm, re-centre with a small 10-20° correction, and try a shorter move.
+
+**Obstacle blocking path (chair, furniture, person):** if a forward move is blocked by a visible obstacle in the camera image — even without a bumper event — do not stop or re-survey indefinitely. Back off 20 cm, pick the side with the larger visible gap, turn 45–60° to clear the obstacle by at least one robot radius (~20 cm), then re-aim toward the door. Never declare a DNF because of a single obstacle; there is always a way around.
 
 If wheel-drop is active, stop immediately and do not continue until the state clears.
 
