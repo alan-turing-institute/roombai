@@ -884,7 +884,7 @@ def mover_thread():
                 bump_R = "R" in status
                 _approach_bumps += 1
                 log(f"[MOVER] APPROACH: bump_{status[5:]} ({_approach_bumps})")
-                do_reverse_safe(28, skip_check=True)
+                do_reverse_safe(40, skip_check=True)
 
                 if _approach_bumps >= 3:
                     # Can't drive straight to door — sidestep around obstacle
@@ -1004,7 +1004,7 @@ def mover_thread():
                 _corner_bump_count += 1
 
                 # Back off far enough to have room to turn
-                do_reverse_safe(25, skip_check=True)
+                do_reverse_safe(40, skip_check=True)
 
                 if _corner_bump_count >= CORNER_ESCAPE_BUMPS:
                     # ── Corner escape ─────────────────────────────────────
@@ -1017,7 +1017,7 @@ def mover_thread():
                         f"{displacement:.0f}cm from ref → {escape_deg:+.0f}°"
                     )
                     speak("Stuck in corner. Escaping.")
-                    do_reverse_safe(20, skip_check=True)   # 45 cm total
+                    do_reverse_safe(20, skip_check=True)   # 60 cm total
                     do_turn(escape_deg)
                     do_forward(MOVE_SPEED, 60.0 / MOVE_SPEED)   # drive 60 cm clear
                     _default_turn_sign *= -1
