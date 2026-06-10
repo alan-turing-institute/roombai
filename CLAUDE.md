@@ -110,9 +110,3 @@ echo "Scanning for target door" >> /tmp/speak_queue.txt
 
 Narrate at every significant decision point: scan results, door detections, movement decisions,
 obstacles encountered, waiting states, and arrival confirmation.
-
----
-
-## Escape Strategy
-
-
