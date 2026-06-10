@@ -18,6 +18,7 @@ Usage:
 """
 
 import argparse
+from collections import deque
 import math
 import re
 import socket
@@ -27,6 +28,32 @@ import numpy as np
 from stable_baselines3 import PPO
 
 from map_walls import WALLS
+
+
+def get_shielded_action(obs, predicted_action, action_history) -> tuple[int, str | None]:
+    # Rule 1: Bumper active
+    if obs[12] > 0.5:
+        if predicted_action != 1:
+            return 1, "Bumper active override: forcing backup (move -15)"
+        return predicted_action, None
+
+    # Rule 2: Front proximity safety (MAX_LIDAR_MM = 50_000.0)
+    front_dist_mm = obs[0] * 50_000.0
+    if front_dist_mm < 400.0 and predicted_action == 0:
+        left_dist_mm = obs[2] * 50_000.0
+        right_dist_mm = obs[6] * 50_000.0
+        if left_dist_mm >= right_dist_mm:
+            return 2, f"Front obstacle too close ({front_dist_mm:.1f} mm) override: turning left (turn 45)"
+        else:
+            return 3, f"Front obstacle too close ({front_dist_mm:.1f} mm) override: turning right (turn -45)"
+
+    # Rule 3: Oscillation prevention
+    if len(action_history) >= 4:
+        last_four = list(action_history)[-4:]
+        if (last_four == [2, 3, 2, 3] or last_four == [3, 2, 3, 2]) and predicted_action in [2, 3]:
+            return 4, "Oscillation loop detected override: forcing turn 90 to break cycle"
+
+    return predicted_action, None
 
 # ---------------------------------------------------------------------------
 # Map constants (derived from simulator/src/map_data.rs)
@@ -218,10 +245,21 @@ def run(
     resp = cmd(sock, "safe")
     print(f"safe → {resp}")
 
+    action_history = deque(maxlen=4)
+
     for step in range(max_steps):
         obs = get_obs(tracker, sock)
         action, _ = model.predict(obs, deterministic=True)
         action_idx = int(action)
+
+        # Apply safety shield
+        shielded_action, override_msg = get_shielded_action(obs, action_idx, action_history)
+        if override_msg:
+            print(f"[{step:4d}] {override_msg}")
+            action_idx = shielded_action
+
+        action_history.append(action_idx)
+
         kind, _ = ACTION_EFFECTS[action_idx]
         _, pilot_cmd_str, description = ACTIONS[action_idx]
 
