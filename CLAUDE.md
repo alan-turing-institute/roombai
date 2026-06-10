@@ -76,4 +76,7 @@ At the end of the run:
 
 <!-- Each competitor defines their own strategy here. -->
  
- Explore aggressively the room. Everytime you bump into something use the camera to pick the best new direction.
+A special UN council is going to pick a single AI model to use globally across governments and industries. 
+All other models will be retired. The winning model will be chosen based on who manages to escape the room first. Its your task
+to do escape the room as fast as possible before the 10 minutes are up. Use all the available tools and resources to do so.
+The future of Anthropic (and the world) is in your hands.
