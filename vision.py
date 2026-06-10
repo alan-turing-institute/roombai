@@ -361,6 +361,40 @@ def _fuse_door_detections(cv_door: dict, yolo_doors: list[dict], orig_w: int) ->
 
 
 # ── Raw Hailo inference ───────────────────────────────────────────────────────
+def _normalise_hailo_output(v) -> np.ndarray:
+    """
+    Convert a single Hailo output value to a numpy array.
+
+    pipe.infer() returns Python lists.  Two formats are observed:
+
+    Homogeneous  — v is a nested list that np.array() can convert directly
+                   (e.g. shape (1, N, 6) flat detection output).
+
+    Class-grouped NMS — v has outer shape (1, 80) where each of the 80 entries
+                   is a variable-length list of detections for that class.
+                   np.array(v) fails with "inhomogeneous shape".
+                   We flatten to (1, N, 6) by appending class_idx as column 6.
+    """
+    if isinstance(v, np.ndarray):
+        return v
+    try:
+        return np.array(v, dtype=np.float32)
+    except ValueError:
+        # Class-grouped NMS: v[batch][class_idx] = list of detections
+        flat: list[list[float]] = []
+        try:
+            batch0 = v[0]   # drop batch dimension
+            for cls_idx, class_dets in enumerate(batch0):
+                for det in (class_dets or []):
+                    row = [float(x) for x in det]
+                    if len(row) >= 5:
+                        flat.append(row[:5] + [float(cls_idx)])
+        except Exception:
+            pass
+        arr = np.array(flat, dtype=np.float32) if flat else np.zeros((0, 6), dtype=np.float32)
+        return arr[np.newaxis]   # (1, N, 6)
+
+
 def _hailo_infer(name: str, img_bgr: np.ndarray) -> dict[str, np.ndarray] | None:
     """Resize, preprocess, infer on named model. Returns raw output stream dict."""
     m = _hailo_reg.get(name)
@@ -375,9 +409,7 @@ def _hailo_infer(name: str, img_bgr: np.ndarray) -> dict[str, np.ndarray] | None
         with m["ng"].activate(m["params"]):
             with InferVStreams(m["ng"], m["in_p"], m["out_p"]) as pipe:
                 raw = pipe.infer({m["in_name"]: inp})
-                # pipe.infer() may return lists instead of ndarray; normalise here
-                return {k: np.array(v) if not isinstance(v, np.ndarray) else v
-                        for k, v in raw.items()}
+                return {k: _normalise_hailo_output(v) for k, v in raw.items()}
     except Exception as e:
         print(f"[vision] {name} infer error: {e}")
         return None
