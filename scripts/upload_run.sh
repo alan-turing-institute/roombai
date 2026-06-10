@@ -48,13 +48,20 @@ SAS_TOKEN=$(cat "$SAS_FILE" | tr -d '[:space:]')
 # Strip leading ? if someone accidentally included it
 SAS_TOKEN="${SAS_TOKEN#\?}"
 
-# Build the full SAS URL rclone expects
-SAS_URL="https://${AZURE_ACCOUNT}.blob.core.windows.net/?${SAS_TOKEN}"
+# Configure the rclone remote via environment variables rather than an inline
+# connection string. The SAS token contains ':' in its se/st timestamps
+# (e.g. se=2029-12-31T22:36:03Z), and rclone's connection-string syntax splits
+# on ':', which mangles the URL ("container name in SAS URL ... do not match").
+# Env-var remote config sidesteps that parsing entirely.
+export RCLONE_CONFIG_ROOMBAI_TYPE="azureblob"
+export RCLONE_CONFIG_ROOMBAI_ACCOUNT="${AZURE_ACCOUNT}"
+export RCLONE_CONFIG_ROOMBAI_SAS_URL="https://${AZURE_ACCOUNT}.blob.core.windows.net/?${SAS_TOKEN}"
 
 ATTEMPT_NAME=$(basename "$ATTEMPT_DIR")
-REMOTE=":azureblob,account=${AZURE_ACCOUNT},sas_url=${SAS_URL}:${CONTAINER}"
 
 echo "Uploading ${ATTEMPT_NAME} → ${CONTAINER}/${ATTEMPT_NAME} ..."
-rclone copy "$ATTEMPT_DIR" "${REMOTE}/${ATTEMPT_NAME}" --progress
+# NOTE: the SAS token must include READ permission (r) in addition to write/
+# list/create — rclone HEADs the destination on init, which requires read.
+rclone copy "$ATTEMPT_DIR" "ROOMBAI:${CONTAINER}/${ATTEMPT_NAME}" --progress
 
 echo "Done."
