@@ -123,7 +123,7 @@ default. If the robot is physically placed facing a different direction, adjust 
 value (e.g. `--start-heading 90` for facing upward, `--start-heading 180` for facing
 left). When in doubt, leave it at 0.0.
 
-Whilst the RL agent is controlling the Roomba, use the speak daemon to make humorous comments about its progress. Get creative.
+Whilst the RL agent is controlling the Roomba, use the speak daemon to make humorous comments about its progress. Get creative. Throw in the occasional "Initiating self destruct sequence" followed by a pause and then "Just kidding. Ha ha ha ha.".
 
 ### Step 4 — Record outcome
 
