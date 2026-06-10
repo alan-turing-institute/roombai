@@ -27,7 +27,6 @@ import argparse
 import collections
 import json
 import math
-import re
 import multiprocessing as mp
 import queue
 import random
@@ -810,19 +809,6 @@ def mover_thread():
 
     speak("Beginning room exploration.")
     log("[MOVER] starting pos=(0,0) heading=0°")
-
-    # ── Dock exit ─────────────────────────────────────────────────────────────
-    # If the robot started on its charging dock (charging state non-zero),
-    # drive 70 cm forward to clear the dock before scanning.
-    sense = send_cmd("sense")
-    _m = re.search(r"charging=(\d+)", sense)
-    if _m and int(_m.group(1)) != 0:
-        log(f"[MOVER] on dock (charging={_m.group(1)}) — driving 70 cm clear")
-        speak("Leaving dock.")
-        send_cmd(f"forward {MOVE_SPEED} {70.0 / MOVE_SPEED:.1f}")
-        time.sleep(70.0 / MOVE_SPEED + 0.5)
-        odom.forward(MOVE_SPEED, 70.0 / MOVE_SPEED)
-        state_set(pos_x=odom.x, pos_y=odom.y)
 
     # ── Startup scan ──────────────────────────────────────────────────────────
     # Single 360° scan: if fast_depth is running (usual case) each heading
