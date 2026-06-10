@@ -57,10 +57,14 @@ LOG_FILE      = Path("/tmp/roomba_log.txt")
 STATE_FILE    = Path("/tmp/roomba_state.json")
 STRATEGY_FILE = Path("/tmp/roomba_strategy.json")
 
-FRAME_INTERVAL  = 1.0   # seconds between camera captures
-MOVE_SPEED      = 35    # cm/s forward speed
+FRAME_INTERVAL  = 0.5   # seconds between camera captures
+MIN_MOVE_CM     = 2.0   # minimum translation since last photo — skip if less
+MIN_TURN_DEG    = 10.0  # minimum heading change since last photo — skip if less
+MOVE_SPEED      = 15    # cm/s forward speed
 MOVE_BURST      = 3.0   # seconds per forward burst
 SCAN_ROCK_CM    = 20    # forward distance (cm) rocked at each scan heading for flow depth
+SCAN_WAIT_S     = 2.0   # seconds to wait at each scan heading for a fresh frame
+                         # = FRAME_INTERVAL + capture(0.8s) + analysis(0.5s) + margin
 
 DOOR_CONFIRM_FRAMES = 3    # positives needed to trigger approach
 DOOR_CONFIRM_WINDOW = 7    # sliding window length in frames (~14 s at 2 s/frame)
@@ -70,7 +74,8 @@ DOOR_SLOW_BURST     = 1.0      # forward burst (s) when door hit in current wind
 
 CORNER_PROGRESS_CM  = 35   # min displacement (cm) between bumps to reset corner counter
 CORNER_ESCAPE_BUMPS = 3    # consecutive stuck bumps before executing corner escape
-SCAN_EVERY_BUMPS = 6           # pause for a 360° scan every N bumps
+SCAN_EVERY_BUMPS = 3           # pause for a 360° scan every N bumps
+SCAN_EVERY_CM    = 300         # also scan every N cm of odometry travel
 MAP_SAVE_INTERVAL = 30         # seconds between periodic map saves
 APPROACH_SLOW_DIST  = 150  # cm — half-speed below this
 APPROACH_STOP_DIST  = 40   # cm — stop and declare arrival
@@ -104,6 +109,7 @@ _state: dict = {
     "blocked":         {"left": False, "center": False, "right": False},
     "clear_path":      None,   # "left" | "center" | "right" | None
     "nearest_cm":      None,   # distance to nearest blocking obstacle
+    "legs_blocking":   False,  # True when detect_thin_legs reports a near leg
     "open_space":      {"left": 0.0, "center": 0.0, "right": 0.0},  # depth-map far fractions
     "log_lines":       0,
 }
@@ -116,6 +122,12 @@ map_recorder = MapRecorder()
 # never moves without up-to-date scene information.
 _vision_idle = threading.Event()
 _vision_idle.set()  # no analysis in progress at startup
+
+# Set by the camera thread after a photo taken while the robot was stationary
+# has been fully analysed.  Cleared by do_turn/do_forward when motion begins
+# (heading or position will change, making the current photo stale).
+# do_forward() waits on this before every drive burst.
+_rest_photo_ready = threading.Event()
 
 
 # ── Vision child-process worker ───────────────────────────────────────────────
@@ -388,6 +400,17 @@ def camera_thread():
 
     while state_get("mode") != "STOP":
         time.sleep(FRAME_INTERVAL)
+
+        # Skip capture if the robot hasn't moved or turned since the last photo,
+        # BUT only when a rest photo isn't still needed.  If _rest_photo_ready is
+        # not set, the mover is waiting for a stationary photo — don't skip.
+        if prev_odom is not None and _rest_photo_ready.is_set():
+            pre = odom.snapshot()
+            d_pos = math.hypot(pre[0] - prev_odom[0], pre[1] - prev_odom[1])
+            d_hdg = abs((pre[2] - prev_odom[2] + 180) % 360 - 180)
+            if d_pos < MIN_MOVE_CM and d_hdg < MIN_TURN_DEG:
+                continue
+
         frame_num += 1
         path = FRAME_DIR / f"frame_{frame_num:05d}.jpg"
 
@@ -435,6 +458,9 @@ def camera_thread():
             scene = _vision.analyze(curr_img, prev_img, baseline_cm)
         finally:
             _vision_idle.set()
+            # Photo was taken while stationary — signal that the mover can drive
+            if baseline_cm < MIN_MOVE_CM:
+                _rest_photo_ready.set()
         if scene is None:
             prev_img  = curr_img    # keep prev_img current for next frame's flow
             prev_odom = curr_odom
@@ -472,6 +498,7 @@ def camera_thread():
             blocked=obs_map["blocked"],
             clear_path=obs_map["clear_path"],
             nearest_cm=obs_map["nearest_cm"],
+            legs_blocking=scene.get("legs_blocking", False),
         )
 
         if detections:
@@ -586,6 +613,8 @@ def mover_thread():
     _approach_bumps    = 0
     _consecutive_stuck = 0
     _bumps_since_scan  = 0
+    _last_scan_x       = 0.0   # odometry position at the last 360° scan
+    _last_scan_y       = 0.0
     # Corner escape state
     _default_turn_sign = -1    # -1=CW, +1=CCW; flips each time it's used with no depth preference
     _corner_bump_count = 0     # bumps without CORNER_PROGRESS_CM of displacement
@@ -606,16 +635,21 @@ def mover_thread():
         Returns (status, actual_secs_traveled).
           status: "ok" | "bump_L" | "bump_R" | "bump_LR"
         """
+        # Never drive without a photo analysed at the current stopped position.
+        if not _rest_photo_ready.wait(timeout=10.0):
+            log("[MOVER] WARNING: rest photo timeout — proceeding anyway")
+        _rest_photo_ready.clear()   # position/heading will change during drive
+
         elapsed = 0.0
         bump_side = ""
         while elapsed < secs:
             if state_get("mode") == "STOP":
                 break
-            # Mid-burst leg check: if the camera thread has flagged the center
-            # as blocked (legs or close obstacle) since we started this burst,
-            # stop now rather than waiting for a physical bump.
-            blk = state_get("blocked") or {}
-            if blk.get("center") and state_get("nearest_cm") is None:
+            # Mid-burst leg check: stop if leg geometry (not YOLO) has flagged
+            # the center blocked since this burst started.  Using the dedicated
+            # legs_blocking flag avoids a false negative when YOLO sees an
+            # unrelated object (nearest_cm non-None) while legs are the real hazard.
+            if state_get("legs_blocking") and (state_get("blocked") or {}).get("center"):
                 send_cmd("stop")
                 log(f"[MOVER] mid-burst stop: legs blocking center after {elapsed:.1f}s")
                 return "blocked_legs", elapsed
@@ -644,6 +678,7 @@ def mover_thread():
         return "ok", elapsed
 
     def do_turn(deg: float):
+        _rest_photo_ready.clear()   # heading will change — existing photo is stale
         send_cmd(f"turn {deg:.0f}")
         odom.turn(deg)
         state_set(heading=odom.heading)
@@ -669,7 +704,7 @@ def mover_thread():
         do_turn(180)
 
         if not skip_check:
-            time.sleep(2.2)   # let camera capture at new heading
+            time.sleep(SCAN_WAIT_S)   # let camera capture at new heading
             nearest  = state_get("nearest_cm") or 9999
             blocked_c = (state_get("blocked") or {}).get("center", False)
             if blocked_c and nearest < dist_cm + 20:
@@ -684,27 +719,25 @@ def mover_thread():
 
     def do_scan_360():
         """
-        360° depth scan: 8 × 45° steps with a ±SCAN_ROCK_CM forward rock.
+        360° scan: 8 × 45° turns, one frame per heading.
 
-        At each heading:
+        fast_depth (running on every frame) gives open-space L/C/R depth
+        fractions without any translational motion, so the optical-flow
+        rock is skipped whenever fast_depth is providing scene_depth_cm.
+
+        Optical-flow rock fallback (when scene_depth_cm is None):
           Frame A  — stationary at position X, heading H
-          (robot moves forward SCAN_ROCK_CM to X+20 cm)
-          Frame B  — stationary at X+20 cm, heading H
-            → optical flow A→B  baseline = 20 cm  → depth at heading H  ✓
-          (robot rotates 180° and waits for camera)
-          Frame C  — stationary at X+20 cm, heading H+180°
-            → used as obstacle check before returning; flow B→C is a pure
-               rotation so contributes no translational depth
-          (robot drives forward SCAN_ROCK_CM to return to X)
-          Frame D  — stationary at X, heading H+180°
-            → optical flow C→D  baseline = 20 cm  → depth at heading H+180° ✓
-          (robot rotates 180° back to heading H, ready for next –45° turn)
-
-        The return leg uses do_reverse_safe() so the camera always faces the
-        direction of travel before moving.
+          (robot moves forward SCAN_ROCK_CM)
+          Frame B  — stationary at X+rock, heading H  → flow A→B depth ✓
+          Return via do_reverse_safe(skip_check=True) — path is clear.
         """
-        log(f"[MOVER] SCAN: 360° depth scan (±{SCAN_ROCK_CM} cm rock per heading)")
-        speak("Pausing for depth scan.")
+        use_rock = state_get("scene_depth_cm") is None
+        if use_rock:
+            log(f"[MOVER] SCAN: 360° depth scan with ±{SCAN_ROCK_CM} cm rock "
+                "(fast_depth unavailable)")
+        else:
+            log("[MOVER] SCAN: 360° fast scan (fast_depth active — no rock needed)")
+        speak("Starting scan.")
         rock_cm   = SCAN_ROCK_CM
         rock_secs = rock_cm / MOVE_SPEED
 
@@ -713,17 +746,16 @@ def mover_thread():
                 break
 
             do_turn(-45)
-            time.sleep(2.2)                        # frame A: heading H, position X
+            time.sleep(SCAN_WAIT_S)   # wait for a fresh frame at this heading
 
-            do_forward(MOVE_SPEED, rock_secs)      # move to X + SCAN_ROCK_CM
-            time.sleep(2.2)                        # frame B: flow A→B gives depth at H
+            if not use_rock:
+                continue   # fast_depth already gave open_space for this heading
 
-            # Return using safe reverse (rotate, check, forward, rotate back).
-            # skip_check=False so frame C provides a real obstacle check before
-            # we commit to the return move.
-            do_reverse_safe(rock_cm, skip_check=False)
-            # After do_reverse_safe: position ≈ X, heading H
-            # Frame D was captured during the return forward leg (flow C→D, heading H+180°)
+            # Optical-flow fallback: rock forward and return for flow depth.
+            do_forward(MOVE_SPEED, rock_secs)
+            time.sleep(SCAN_WAIT_S)   # frame B: flow A→B gives depth at H
+            # skip_check=True — we just drove that path, it's clear
+            do_reverse_safe(rock_cm, skip_check=True)
 
     def choose_avoid_turn(map_obs: list | None = None) -> float:
         """
@@ -775,28 +807,18 @@ def mover_thread():
     log("[MOVER] starting pos=(0,0) heading=0°")
 
     # ── Startup scan ──────────────────────────────────────────────────────────
-    # Quick 360° photo scan first: 8 × 45° turns, camera fires at each heading.
-    # If a door is found, APPROACH triggers immediately and we skip the rocker.
-    # If not, follow up with a full rocker scan (±20 cm rock per heading) for
-    # optical-flow depth data before starting exploration.
-    log("[MOVER] startup: quick 360° photo scan")
+    # Single 360° scan: if fast_depth is running (usual case) each heading
+    # takes only ~3 s (turn + wait), ~24 s total.  If fast_depth is not yet
+    # providing depth, falls back to the optical-flow rock (~102 s).
+    log("[MOVER] startup: 360° scan")
     speak("Starting initial scan.")
     _vision_idle.wait(timeout=15.0)   # ensure first vision frame is ready
-
-    for _ in range(8):
-        do_turn(-45)
-        time.sleep(2.2)               # let camera capture at this heading
-        if state_get("mode") in ("APPROACH", "STOP"):
-            break
+    do_scan_360()
+    _last_scan_x, _last_scan_y = odom.x, odom.y
 
     if state_get("mode") not in ("APPROACH", "STOP"):
-        log("[MOVER] startup: door not found in photo scan — running rocker scan")
-        speak("No door found. Running depth scan.")
-        do_scan_360()
-
-    if state_get("mode") not in ("APPROACH", "STOP"):
-        log("[MOVER] startup: scans done — beginning exploration")
-        speak("Scans complete. Exploring.")
+        log("[MOVER] startup: scan done — beginning exploration")
+        speak("Scan complete. Exploring.")
 
     while True:
         # Block until the camera thread has finished analysing the latest frame.
@@ -1056,6 +1078,18 @@ def mover_thread():
 
                 _bumps_since_scan += 1
                 if _bumps_since_scan >= SCAN_EVERY_BUMPS:
+                    _bumps_since_scan = 0
+                    _last_scan_x, _last_scan_y = odom.x, odom.y
+                    do_scan_360()
+
+            else:
+                # Clean burst — check distance-based scan trigger
+                dist_from_scan = math.hypot(odom.x - _last_scan_x,
+                                            odom.y - _last_scan_y)
+                if dist_from_scan >= SCAN_EVERY_CM:
+                    log(f"[MOVER] distance scan: {dist_from_scan:.0f}cm since last scan")
+                    speak("Scanning after travelling three metres.")
+                    _last_scan_x, _last_scan_y = odom.x, odom.y
                     _bumps_since_scan = 0
                     do_scan_360()
 

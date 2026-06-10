@@ -44,6 +44,7 @@ LEG_MAX_SLOPE     = 0.15    # max |dx/dy| to count as near-vertical
 LEG_MIN_CLUSTER   = 2       # min Hough segments per cluster to count as a real leg
 CHAIR_PAIR_MAX_CM = 80.0    # real-world gap below which two legs are treated as the same
                              # chair; the invisible floor bar means the gap is also blocked
+LEG_MAX_DIST_CM   = 200.0   # don't block navigation for legs further than this
 STUCK_BASELINE_CM = 20.0
 STUCK_FLOW_PX     = 3.0
 
@@ -1043,6 +1044,9 @@ def detect_thin_legs(
     gray  = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     blur  = cv2.GaussianBlur(gray, (3, 3), 0)
     edges = cv2.Canny(blur, 40, 120)
+    # Connect broken edge chains on thin/reflective legs before Hough transform
+    vkernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 7))
+    edges   = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, vkernel)
 
     min_len = int(roi_h * LEG_MIN_LENGTH)
     lines = cv2.HoughLinesP(
@@ -1050,7 +1054,7 @@ def detect_thin_legs(
         rho=1, theta=np.pi / 180,
         threshold=25,
         minLineLength=min_len,
-        maxLineGap=6,
+        maxLineGap=14,
     )
 
     blocked = {"left": False, "center": False, "right": False}
@@ -1077,11 +1081,11 @@ def detect_thin_legs(
     if not segs:
         return {"blocked": blocked, "legs": leg_xs}
 
-    # Simple 1-D clustering by x-position (merge within 15 px)
+    # Simple 1-D clustering by x-position (merge within 30 px)
     segs.sort(key=lambda s: s[0])
     clusters: list[list[tuple[float, float]]] = [[segs[0]]]
     for seg in segs[1:]:
-        if seg[0] - clusters[-1][-1][0] < 15:
+        if seg[0] - clusters[-1][-1][0] < 30:
             clusters[-1].append(seg)
         else:
             clusters.append([seg])
@@ -1098,6 +1102,12 @@ def detect_thin_legs(
         # back to scene_depth_cm when y_horizon is not yet calibrated.
         fp_dist = floor_plane_depth(y_bot, y_horizon) if y_horizon > 0 else None
         leg_dist = fp_dist if fp_dist is not None else scene_depth_cm
+
+        # Skip navigation blocking for distant legs — they're not an
+        # immediate hazard and distant vertical structures (walls, door
+        # frames) produce many false positives.
+        if leg_dist and leg_dist > LEG_MAX_DIST_CM:
+            continue
 
         # Estimate real-world clearance: use ROBOT_WIDTH_CM at leg distance.
         if leg_dist and leg_dist > 0:
@@ -1149,6 +1159,8 @@ def detect_thin_legs(
             gap_cm = gap_px * dist / FOCAL_PX
             if gap_cm > CHAIR_PAIR_MAX_CM:
                 continue   # too far apart — different chairs or not a chair
+            if dist > LEG_MAX_DIST_CM:
+                continue   # chair pair too far to be an immediate hazard
 
             # Block every frame-third that overlaps the region [x_left, x_right]
             x_left  = min(cx_a, cx_b)
@@ -1164,7 +1176,8 @@ def detect_thin_legs(
                 flush=True,
             )
 
-    return {"blocked": blocked, "legs": leg_xs}
+    legs_blocking = any(blocked.values())
+    return {"blocked": blocked, "legs": leg_xs, "legs_blocking": legs_blocking}
 
 
 # ── Main scene analysis ───────────────────────────────────────────────────────
@@ -1228,7 +1241,8 @@ def analyze_scene(
     )
     leg_result = detect_thin_legs(img_bgr, scene_depth_cm=scene_depth_cm,
                                   y_horizon=y_horizon)
-    if any(leg_result["blocked"].values()):
+    legs_blocking = leg_result.get("legs_blocking", False)
+    if legs_blocking:
         for side, val in leg_result["blocked"].items():
             if val:
                 obstacles["blocked"][side] = True
@@ -1267,6 +1281,7 @@ def analyze_scene(
         "flow_field":     flow_field,
         "stuck":          stuck,
         "y_horizon":      y_horizon,
+        "legs_blocking":  legs_blocking,
     }
 
 
