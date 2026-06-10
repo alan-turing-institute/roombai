@@ -82,6 +82,19 @@ KNOWN_HEIGHTS_CM: dict[str, float] = {
     "cat": 25.0,
 }
 
+# Typical object widths (cm) — complement to heights; used when width is
+# the more reliably visible dimension (e.g. wide objects, partial occlusion).
+KNOWN_WIDTHS_CM: dict[str, float] = {
+    "person": 50.0, "bicycle": 60.0, "chair": 55.0, "couch": 190.0,
+    "dining table": 120.0, "bench": 120.0, "car": 185.0, "tv": 80.0,
+    "refrigerator": 70.0, "bed": 140.0, "toilet": 40.0, "laptop": 35.0,
+}
+
+# Smoothed horizon y-coordinate (pixels), updated per frame via EMA.
+# Represents the vanishing line of the floor plane.
+_y_horizon_ema: float | None = None
+_HORIZON_EMA_ALPHA = 0.10   # slow update — horizon is stable across frames
+
 # ── Hailo multi-model registry ────────────────────────────────────────────────
 _hailo_lock = threading.Lock()
 _hailo_vdev = None                       # one VDevice shared across all models
@@ -432,6 +445,132 @@ def analyze_motion(
         return result
 
 
+# ── Floor-plane geometry ──────────────────────────────────────────────────────
+def floor_plane_depth(y_base: float, y_horizon: float) -> float | None:
+    """
+    Metric distance to a floor-contact point via camera height + pixel row.
+
+    For a camera at CAMERA_HEIGHT_CM above the floor looking roughly
+    horizontally, a point on the floor at pixel row y_base is at:
+        d = CAMERA_HEIGHT_CM × FOCAL_PX / (y_base − y_horizon)
+
+    Returns None when y_base is at or above the horizon (object too far),
+    or when the implied distance exceeds 800 cm (formula unreliable).
+    """
+    dy = y_base - y_horizon
+    if dy < 2:
+        return None
+    d = CAMERA_HEIGHT_CM * FOCAL_PX / dy
+    return round(d, 1) if d <= 800 else None
+
+
+def _estimate_horizon(img_bgr: np.ndarray) -> float | None:
+    """
+    Estimate the horizon y-coordinate from near-horizontal Hough lines.
+
+    Long horizontal edges (door frames, skirting boards, wall junctions)
+    converge near the horizon.  The median y-intercept of lines that are
+    within ~8° of horizontal and land in the middle 55 % of the frame
+    gives a robust vanishing-line estimate.
+    """
+    h, w = img_bgr.shape[:2]
+    gray  = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 30, 90)
+    lines = cv2.HoughLinesP(
+        edges, 1, np.pi / 180, threshold=40,
+        minLineLength=int(w * 0.20), maxLineGap=15,
+    )
+    if lines is None:
+        return None
+    ys = []
+    for line in lines:
+        x1, y1, x2, y2 = line[0]
+        dx = abs(x2 - x1)
+        dy = abs(y2 - y1)
+        if dx < 1 or dy / dx > 0.15:   # reject lines steeper than ~8°
+            continue
+        y_mid = (y1 + y2) / 2.0
+        if h * 0.20 < y_mid < h * 0.75:
+            ys.append(y_mid)
+    return float(np.median(ys)) if len(ys) >= 3 else None
+
+
+def _update_horizon(img_bgr: np.ndarray) -> float:
+    """
+    Update the EMA-smoothed horizon estimate and return the current value.
+
+    Falls back to frame_h / 2 (perfectly horizontal camera) when no lines
+    have been detected yet.  Clamped to [25 %, 75 %] of frame height to
+    prevent runaway estimates after an extreme bump.
+    """
+    global _y_horizon_ema
+    h = img_bgr.shape[0]
+    est = _estimate_horizon(img_bgr)
+    if est is not None:
+        if _y_horizon_ema is None:
+            _y_horizon_ema = est
+        else:
+            _y_horizon_ema = (
+                (1 - _HORIZON_EMA_ALPHA) * _y_horizon_ema
+                + _HORIZON_EMA_ALPHA * est
+            )
+    base = _y_horizon_ema if _y_horizon_ema is not None else h / 2.0
+    return float(np.clip(base, h * 0.25, h * 0.75))
+
+
+def _floor_texture_depth(img_bgr: np.ndarray, y_horizon: float) -> float | None:
+    """
+    Estimate scene depth from the texture-frequency gradient on the floor.
+
+    Perspective causes a uniform floor texture to appear at higher spatial
+    frequency further away: E ∝ d² where E is Laplacian variance and d is
+    distance.  We calibrate the constant k = E/d² using floor-plane geometry
+    on 8 horizontal bands, then derive a scene-level depth from the median
+    texture energy.
+
+    Returns None on smooth / textureless floors (variance too uniform) or
+    when y_horizon leaves fewer than 3 usable bands.
+    Weight guideline for callers: 0.25 (weaker than fast_depth, stronger
+    than known-height — metric but assumes uniform texture).
+    """
+    h, w = img_bgr.shape[:2]
+    floor_top = max(0, int(y_horizon))
+    if floor_top >= h - 20:
+        return None
+
+    gray   = cv2.cvtColor(img_bgr[floor_top:, :], cv2.COLOR_BGR2GRAY)
+    roi_h  = gray.shape[0]
+    n_bands = 8
+    bh     = max(1, roi_h // n_bands)
+
+    pairs: list[tuple[float, float]] = []   # (d_cm, laplacian_variance)
+    for i in range(n_bands):
+        y0  = i * bh
+        y1b = min(roi_h, y0 + bh)
+        band = gray[y0:y1b, :]
+        energy = float(np.var(cv2.Laplacian(band.astype(np.float32), cv2.CV_32F)))
+        y_abs  = floor_top + (y0 + y1b) / 2.0
+        d      = floor_plane_depth(y_abs, y_horizon)
+        if d is not None and energy > 0:
+            pairs.append((d, energy))
+
+    if len(pairs) < 3:
+        return None
+
+    energies = [e for _, e in pairs]
+    if np.std(energies) < 5.0:     # floor too uniform — texture gradient unreliable
+        return None
+
+    # k = E / d²  (median across bands)
+    k = float(np.median([e / (d ** 2) for d, e in pairs]))
+    if k <= 0:
+        return None
+
+    med_energy = float(np.median(energies))
+    d_est = round((med_energy / k) ** 0.5, 1)
+    return d_est if 20 < d_est < 600 else None
+
+
 # ── Distance fusion ───────────────────────────────────────────────────────────
 def _fuse_distances(estimates: list[tuple[float, float]]) -> float | None:
     """
@@ -445,9 +584,11 @@ def _fuse_distances(estimates: list[tuple[float, float]]) -> float | None:
     from dominating when two other methods agree.
 
     Weight guidelines (callers should pass these):
-      fast_depth    — 0.7     (metric depth, primary sensor, highest trust)
-      optical flow  — 0.2–0.7 (scales with baseline_cm / 25, capped at 0.7)
-      known height  — 0.3     (assumes typical object size, lowest trust)
+      fast_depth      — 0.7     (metric, primary sensor, highest trust)
+      floor-plane     — 0.8     (metric, exact for floor-contact objects)
+      optical flow    — 0.2–0.7 (scales with baseline_cm / 25, capped at 0.7)
+      texture depth   — 0.25    (metric but assumes uniform floor texture)
+      known height/w  — 0.3     (assumes typical object size, lowest trust)
     """
     if not estimates:
         return None
@@ -478,6 +619,7 @@ def _parse_yolo_boxes(
     scene_depth_cm: float | None = None,
     flow_field: np.ndarray | None = None,
     baseline_cm: float = 0.0,
+    y_horizon: float = 0.0,
 ) -> list[dict]:
     """
     Parse raw Hailo YOLO output into detection dicts.
@@ -556,6 +698,20 @@ def _parse_yolo_boxes(
             rh = KNOWN_HEIGHTS_CM.get(class_name)
             if rh and pixel_h > 5:
                 estimates.append((round(rh * FOCAL_PX / pixel_h, 1), 0.3))
+
+            # Known-width formula — complement to height; useful when the
+            # object is wide but partially occluded vertically.
+            rw = KNOWN_WIDTHS_CM.get(class_name)
+            pixel_w = x2 - x1
+            if rw and pixel_w > 5:
+                estimates.append((round(rw * FOCAL_PX / pixel_w, 1), 0.3))
+
+            # Floor-plane geometry — bbox bottom is the floor contact point.
+            # Metric and reliable; weight 0.8 for floor-touching objects.
+            if y_horizon > 0:
+                fp = floor_plane_depth(y2, y_horizon)
+                if fp is not None:
+                    estimates.append((fp, 0.8))
 
             dist_cm   = _fuse_distances(estimates)
             real_h_cm = round(pixel_h * dist_cm / FOCAL_PX, 1) if (dist_cm and pixel_h > 5) else None
@@ -832,6 +988,7 @@ def detect_door_cv(
 def detect_thin_legs(
     img_bgr: np.ndarray,
     scene_depth_cm: float | None = None,
+    y_horizon: float = 0.0,
 ) -> dict:
     """
     Detect thin near-vertical structures (chair legs) in the floor region.
@@ -867,8 +1024,9 @@ def detect_thin_legs(
     if lines is None:
         return {"blocked": blocked, "legs": leg_xs}
 
-    # Keep only near-vertical segments and cluster by x-position
-    xs: list[float] = []
+    # Keep only near-vertical segments and cluster by x-position.
+    # Also track the max y (lowest pixel) per segment for floor-plane depth.
+    segs: list[tuple[float, float]] = []   # (x_centre, y_bottom_in_full_frame)
     for line in lines:
         x1l, y1l, x2l, y2l = line[0]
         dy = abs(y2l - y1l)
@@ -877,31 +1035,38 @@ def detect_thin_legs(
             continue
         if dx / dy > LEG_MAX_SLOPE:   # too diagonal — not a leg
             continue
-        xs.append((x1l + x2l) / 2.0)
+        x_mid  = (x1l + x2l) / 2.0
+        y_bot  = floor_top + max(y1l, y2l)   # convert ROI coords to full frame
+        segs.append((x_mid, y_bot))
 
-    if not xs:
+    if not segs:
         return {"blocked": blocked, "legs": leg_xs}
 
-    # Simple 1-D clustering: merge x-positions within 15 px of each other
-    xs.sort()
-    clusters: list[list[float]] = [[xs[0]]]
-    for x in xs[1:]:
-        if x - clusters[-1][-1] < 15:
-            clusters[-1].append(x)
+    # Simple 1-D clustering by x-position (merge within 15 px)
+    segs.sort(key=lambda s: s[0])
+    clusters: list[list[tuple[float, float]]] = [[segs[0]]]
+    for seg in segs[1:]:
+        if seg[0] - clusters[-1][-1][0] < 15:
+            clusters[-1].append(seg)
         else:
-            clusters.append([x])
+            clusters.append([seg])
 
     for cl in clusters:
-        cx = float(np.mean(cl))
+        cx     = float(np.mean([s[0] for s in cl]))
+        y_bot  = float(max(s[1] for s in cl))
         cx_frac = cx / w
         leg_xs.append(round(cx_frac, 3))
 
-        # Estimate real-world clearance: use ROBOT_WIDTH_CM at scene depth
-        # to decide whether this leg actually threatens the robot's path.
-        if scene_depth_cm and scene_depth_cm > 0:
-            robot_px = ROBOT_WIDTH_CM * FOCAL_PX / scene_depth_cm
-            left_clear  = cx > robot_px / 2          # enough room on the left of this leg
-            right_clear = (w - cx) > robot_px / 2   # enough room on the right
+        # Distance to this leg: prefer floor-plane formula (metric), fall
+        # back to scene_depth_cm when y_horizon is not yet calibrated.
+        fp_dist = floor_plane_depth(y_bot, y_horizon) if y_horizon > 0 else None
+        leg_dist = fp_dist if fp_dist is not None else scene_depth_cm
+
+        # Estimate real-world clearance: use ROBOT_WIDTH_CM at leg distance.
+        if leg_dist and leg_dist > 0:
+            robot_px = ROBOT_WIDTH_CM * FOCAL_PX / leg_dist
+            left_clear  = cx > robot_px / 2
+            right_clear = (w - cx) > robot_px / 2
         else:
             left_clear  = cx > w * 0.15
             right_clear = (w - cx) > w * 0.15
@@ -949,6 +1114,10 @@ def analyze_scene(
     """
     orig_h, orig_w = img_bgr.shape[:2]
 
+    # 0. Horizon calibration — estimate vanishing line of the floor plane.
+    # Updated every frame via EMA so it tracks camera tilt after bumps.
+    y_horizon = _update_horizon(img_bgr)
+
     # 1. fast_depth — primary depth sensor (metric, every frame, no motion needed)
     depth_map: np.ndarray | None = None
     scene_depth_cm: float | None = None
@@ -967,18 +1136,23 @@ def analyze_scene(
         if scene_depth_cm is None:
             scene_depth_cm = motion.get("scene_depth_cm")    # fallback when fast_depth unavailable
 
+    # 2b. Texture-gradient depth — fallback when both fast_depth and flow unavailable.
+    if scene_depth_cm is None:
+        scene_depth_cm = _floor_texture_depth(img_bgr, y_horizon)
+
     # 3. YOLO detection
     detections: list[dict] = []
     raw = _hailo_infer("yolo_det", img_bgr)
     if raw is not None:
         detections = _parse_yolo_boxes(raw, orig_w, orig_h, depth_map, scene_depth_cm,
-                                       flow_field, baseline_cm)
+                                       flow_field, baseline_cm, y_horizon)
 
     # 4. Obstacle map (YOLO detections + chair-leg geometry)
     obstacles = analyze_obstacles(
         detections, orig_w, orig_h, scene_depth_cm, flow_field, baseline_cm
     )
-    leg_result = detect_thin_legs(img_bgr, scene_depth_cm=scene_depth_cm)
+    leg_result = detect_thin_legs(img_bgr, scene_depth_cm=scene_depth_cm,
+                                  y_horizon=y_horizon)
     if any(leg_result["blocked"].values()):
         for side, val in leg_result["blocked"].items():
             if val:
@@ -1017,6 +1191,7 @@ def analyze_scene(
         "scene_depth_cm": scene_depth_cm,
         "flow_field":     flow_field,
         "stuck":          stuck,
+        "y_horizon":      y_horizon,
     }
 
 
