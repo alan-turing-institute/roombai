@@ -1194,6 +1194,9 @@ async fn main() {
 
     let mut succeeded = false;
     let mut roomba_door_side: Option<f32> = None;
+    // Set to Some(sign) once the Roomba has crossed the target door while it was open.
+    // sign is the signum() of `side` on the far side of the door.
+    let mut door_crossed_sign: Option<f32> = None;
 
     loop {
         let dt = get_frame_time().min(0.05);
@@ -1213,7 +1216,8 @@ async fn main() {
             s.target_door_open = td_open;
         }
 
-        // Check if Roomba has crossed the target door line
+        // Check success: Roomba must cross the target door while open,
+        // then travel at least 1000 mm past it on the far side.
         if !succeeded {
             if let Some(td) = doors.iter().find(|d| d.is_target) {
                 let mid = (td.p1 + td.p2) * 0.5;
@@ -1222,12 +1226,21 @@ async fn main() {
                 let s = state.lock().unwrap();
                 let rpos = Vec2::new(s.x, s.y);
                 let side = (rpos - mid).dot(normal);
-                if let Some(prev) = roomba_door_side {
-                    if td.is_open && prev * side < 0.0 {
+
+                if door_crossed_sign.is_none() {
+                    // Detect initial crossing while door is open
+                    if let Some(prev) = roomba_door_side {
+                        if td.is_open && prev * side < 0.0 {
+                            door_crossed_sign = Some(side.signum());
+                        }
+                    }
+                    roomba_door_side = Some(side);
+                } else if let Some(far_sign) = door_crossed_sign {
+                    // Already crossed; succeed once 1000 mm past the door on the far side
+                    if side.signum() == far_sign && side.abs() >= 1000.0 {
                         succeeded = true;
                     }
                 }
-                roomba_door_side = Some(side);
             }
         }
         // Sync escaped state for TCP queries
@@ -1237,6 +1250,7 @@ async fn main() {
         if state.lock().unwrap().reset_requested {
             succeeded = false;
             roomba_door_side = None;
+            door_crossed_sign = None;
             door_timer = 0.0;
             door_phase_open = false;
             obstacles = generate_obstacles(roomba_start_pos, &walls, &doors, &room_labels);
@@ -1265,6 +1279,7 @@ async fn main() {
         if btn_clicked || (is_key_pressed(KeyCode::R) && !succeeded) {
             succeeded = false;
             roomba_door_side = None;
+            door_crossed_sign = None;
             door_timer = 0.0;
             door_phase_open = false;
             obstacles = generate_obstacles(roomba_start_pos, &walls, &doors, &room_labels);
@@ -1705,6 +1720,7 @@ async fn main() {
             if (is_mouse_button_pressed(MouseButton::Left) && reset_hover) || is_key_pressed(KeyCode::R) {
                 succeeded = false;
                 roomba_door_side = None;
+                door_crossed_sign = None;
                 door_timer = 0.0;
                 door_phase_open = false;
                 obstacles = generate_obstacles(roomba_start_pos, &walls, &doors, &room_labels);
