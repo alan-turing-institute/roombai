@@ -74,6 +74,4 @@ At the end of the run:
 
 ## Escape Strategy
 
-<!-- Each competitor defines their own strategy here. -->
- 
- Explore aggressively the room. Everytime you bump into something use the camera to pick the best new direction.
+Follow the right-hand rule to escape the maze.
