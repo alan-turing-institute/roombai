@@ -1,6 +1,6 @@
 # RoombaI RL Agents
 
-Reinforcement learning agents that train a virtual Roomba to navigate from its starting position in the **Enigma 2.0** room to the exit (**Door 17**) in the RoombaI simulator.
+Reinforcement learning agents that train a virtual Roomba to navigate from its starting position in the **Enigma 2.0** room to the kitchen door (**Door 13**) in the RoombaI simulator.
 
 ---
 
@@ -13,13 +13,18 @@ The agent observes local sensor data (lidar, bumpers, heading) and long-range gu
 ## Prerequisites
 
 - Python 3.10+
+- [`uv`](https://docs.astral.sh/uv/) for environment management
 - The RoombaI simulator built and available at `../simulator/`
 
-Install Python dependencies:
+Create the virtual environment and install dependencies:
 
 ```bash
-pip install -r requirements.txt
+cd agents
+uv venv .venv
+uv pip install -r requirements.txt
 ```
+
+All scripts below use `uv run`, which automatically picks up `.venv` in the current directory. Alternatively activate the venv manually (`source .venv/bin/activate`) and call `python` directly.
 
 ---
 
@@ -68,7 +73,7 @@ The simulator listens on `127.0.0.1:9999`.
 
 ```bash
 cd agents
-python train.py
+uv run train.py
 ```
 
 Options:
@@ -99,11 +104,52 @@ nohup bash -c 'tail -n 0 -f /tmp/speak_queue.txt | while IFS= read -r line; do e
 Then run the agent:
 
 ```bash
-python run_agent.py models/best/best_model.zip
-python run_agent.py models/best/best_model.zip --speed 5   # 5× faster replay
+cd agents
+uv run run_agent.py models/best/best_model.zip
+uv run run_agent.py models/best/best_model.zip --speed 5   # 5× faster replay
 ```
 
 The agent narrates every command to the speak queue before executing it, including the current door state and distance to the exit.
+
+---
+
+## Manual Control
+
+`manual_control.py` is a curses-based TUI for driving the Roomba by keyboard. Use it to explore the simulator environment manually before or between RL training runs — for example, to verify that a path to the kitchen door is navigable and that door timing feels right.
+
+It connects to `127.0.0.1:9999`, the same TCP port used by both the simulator and the real-robot `roomba_pilot` daemon, so it works with either.
+
+**Start the simulator first** (any speed):
+```bash
+cargo run --release -p simulator -- 1
+```
+
+**Launch manual control**:
+```bash
+cd agents
+uv run manual_control.py
+# or against a different host/port:
+uv run manual_control.py --host 127.0.0.1 --port 9999
+```
+
+`uv run` automatically uses the `.venv` in the current directory. Alternatively, activate the venv first: `source .venv/bin/activate`, then call `python` directly.
+
+**Key bindings**:
+
+| Key | Action |
+|-----|--------|
+| W / ↑ | Forward 20 cm |
+| S / ↓ | Backward 10 cm |
+| A / ← | Turn left 30° |
+| D / → | Turn right 30° |
+| Q | Turn left 90° |
+| E | Turn right 90° |
+| Space | Stop |
+| ESC / X | Quit |
+
+The display shows lidar distances in all 8 directions (cm), bumper state, distance to the target door (mm), and whether the door is open or closed. It refreshes automatically every second even without keypresses.
+
+No additional packages are needed — `curses` is Python stdlib.
 
 ---
 
@@ -114,7 +160,7 @@ The agent narrates every command to the speak queue before executing it, includi
 | Index | Source | Range | Description |
 |-------|--------|-------|-------------|
 | 0–7 | `lidar` (F, FL, L, BL, B, BR, R, FR) | [0, 1] | Lidar in cm ÷ 500 |
-| 8 | `target dist` | [0, 1] | Distance to Door 17 in mm ÷ 60 000 |
+| 8 | `target dist` | [0, 1] | Distance to kitchen door (Door 13) in mm ÷ 60 000 |
 | 9 | `target door` | {0, 1} | 1 = door open |
 | 10 | heading | [−1, 1] | sin(heading) |
 | 11 | heading | [−1, 1] | cos(heading) |

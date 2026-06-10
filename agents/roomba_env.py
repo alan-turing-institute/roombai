@@ -18,7 +18,7 @@ HOST = "127.0.0.1"
 PORT = 9999
 
 # Episode parameters
-MAX_STEPS = 500
+MAX_STEPS = 1000
 TRAINING_SPEED = 20
 
 # Coordinate constants (mm)
