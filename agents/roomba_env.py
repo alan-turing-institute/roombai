@@ -22,8 +22,8 @@ MAX_STEPS = 1000
 TRAINING_SPEED = 20
 
 # Coordinate constants (mm)
-START_X = 1520.0 * 36.0   # 54720 mm
-START_Y = 775.0 * 36.0    # 27900 mm
+START_X = 1370.0 * 36.0   # 49320 mm
+START_Y = 825.0 * 36.0    # 29700 mm
 MAX_DIST = 60_000.0        # normalisation denominator for target distance
 MAX_LIDAR_CM = 500.0       # normalisation denominator for lidar (500 cm = 5 m)
 
@@ -130,7 +130,7 @@ class RoombaEnv(gym.Env):
         mh = re.search(r"heading=(-?\d+\.?\d*)", resp)
         x = float(mx.group(1)) if mx else START_X
         y = float(my.group(1)) if my else START_Y
-        h = float(mh.group(1)) if mh else 0.0
+        h = float(mh.group(1)) if mh else -np.pi / 2
         return x, y, h
 
     def _observe(self) -> tuple[np.ndarray, float, int, int]:

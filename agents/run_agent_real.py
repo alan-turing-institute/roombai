@@ -33,8 +33,8 @@ from map_walls import WALLS
 # pdf_pt(x, y) expands to (x*36, y*36) millimetres
 # ---------------------------------------------------------------------------
 
-START_X_MM = 54_720.0           # pdf_pt(1520, 775).x
-START_Y_MM = 27_900.0           # pdf_pt(1520, 775).y
+START_X_MM = 49_320.0           # pdf_pt(1370, 825).x
+START_Y_MM = 29_700.0           # pdf_pt(1370, 825).y
 
 # Door 13 centre: midpoint of pdf_pt(983.95, 618.48) to pdf_pt(1031.84, 618.48)
 DOOR13_X_MM = (983.95 + 1031.84) / 2 * 36   # ≈ 36 284 mm
@@ -281,8 +281,8 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9999)
     parser.add_argument(
-        "--start-heading", type=float, default=0.0,
-        help="Initial heading in degrees (0 = facing right/+x, same as simulator default). "
+        "--start-heading", type=float, default=-90.0,
+        help="Initial heading in degrees (0 = facing right/+x, -90 = facing south). "
              "Adjust if the Roomba is placed facing a different direction.",
     )
     parser.add_argument("--max-steps", type=int, default=500)

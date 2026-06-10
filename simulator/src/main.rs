@@ -117,9 +117,9 @@ struct RobotState {
 impl Default for RobotState {
     fn default() -> Self {
         Self {
-            x: 1520.0 * PDF_TO_MM,
-            y: 775.0 * PDF_TO_MM,
-            heading: 0.0,
+            x: 1370.0 * PDF_TO_MM,
+            y: 825.0 * PDF_TO_MM,
+            heading: -std::f32::consts::FRAC_PI_2,
             vel: 0.0,
             angular: 0.0,
             deadline: None,
@@ -197,9 +197,9 @@ impl RobotState {
     fn new() -> Self {
         // Starts in the middle of Enigma room: X_pdf = 1520.0, Y_pdf = 775.0
         Self {
-            x: 1520.0 * PDF_TO_MM,
-            y: 775.0 * PDF_TO_MM,
-            heading: 0.0,
+            x: 1370.0 * PDF_TO_MM,
+            y: 825.0 * PDF_TO_MM,
+            heading: -std::f32::consts::FRAC_PI_2,
             vel: 0.0,
             angular: 0.0,
             deadline: None,
@@ -588,7 +588,7 @@ fn pick_human_target(is_enigma: bool, room_labels: &[RoomLabel]) -> (Vec2, bool)
             .filter(|rl| !rl.name.contains("ENIGMA"))
             .collect();
         if non_enigma_labels.is_empty() {
-            (Vec2::new(1520.0 * PDF_TO_MM, 775.0 * PDF_TO_MM), true)
+            (Vec2::new(1370.0 * PDF_TO_MM, 825.0 * PDF_TO_MM), true)
         } else {
             let idx = macroquad::rand::rand() as usize % non_enigma_labels.len();
             (non_enigma_labels[idx].pos, false)
@@ -1154,7 +1154,7 @@ async fn main() {
     let mut doors = map_data::get_doors();
     let room_labels = map_data::get_room_labels();
 
-    let roomba_start_pos = Vec2::new(1520.0 * PDF_TO_MM, 775.0 * PDF_TO_MM);
+    let roomba_start_pos = Vec2::new(1370.0 * PDF_TO_MM, 825.0 * PDF_TO_MM);
     // Parse CLI: optional speed multiplier (float) and --humans flag
     let args: Vec<String> = env::args().collect();
     let mut cli_speed: f32 = 1.0;
@@ -1274,7 +1274,7 @@ async fn main() {
             let mut s = state.lock().unwrap();
             s.x = roomba_start_pos.x;
             s.y = roomba_start_pos.y;
-            s.heading = 0.0;
+            s.heading = -std::f32::consts::FRAC_PI_2;
             s.stop();
             s.route.clear();
             s.seen_grid.fill(false);
@@ -1308,7 +1308,7 @@ async fn main() {
             let mut s = state.lock().unwrap();
             s.x = roomba_start_pos.x;
             s.y = roomba_start_pos.y;
-            s.heading = 0.0;
+            s.heading = -std::f32::consts::FRAC_PI_2;
             s.stop();
             s.route.clear();
             s.seen_grid.fill(false);
@@ -1753,7 +1753,7 @@ async fn main() {
                 let mut s = state.lock().unwrap();
                 s.x = roomba_start_pos.x;
                 s.y = roomba_start_pos.y;
-                s.heading = 0.0;
+                s.heading = -std::f32::consts::FRAC_PI_2;
                 s.stop();
                 s.route.clear();
                 s.seen_grid.fill(false);

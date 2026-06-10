@@ -77,7 +77,7 @@ To simulate realistic office behavior and prevent humans from constantly walking
    If a human's actual step distance is less than $10 \text{ mm/s}$ equivalent (meaning they are blocked by a closed door, the Roomba, or another human), the stuck detector triggers. They immediately clear their path queue, select a new random target, and plan a new route, avoiding infinite blockages.
 
 ### 5. Roomba (The Robot)
-*   **Dimensions:** $340\text{ mm}$ diameter ($170\text{ mm}$ radius). Starts in the middle of Enigma.
+*   **Dimensions:** $340\text{ mm}$ diameter ($170\text{ mm}$ radius). Starts in the top-left of the Enigma room, initially facing south.
 *   **Collision Resolution:** Employs sliding multi-pass collision solver against walls, closed doors, obstacles, and humans.
 *   **Watchdog Safety:** Continuous motion commands (`go`, `drive`) stop automatically after 3 seconds of silence.
 *   **Sensors:**
