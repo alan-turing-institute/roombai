@@ -44,6 +44,7 @@ import numpy as np
 from map_maker import MapRecorder
 from model_setup import ensure_models
 from vision import (
+    ObstacleMemory,
     OdometryTracker,
     yolo_labels,
 )
@@ -52,10 +53,11 @@ from vision import (
 PILOT_HOST = "127.0.0.1"
 PILOT_PORT = 9999
 
-FRAME_DIR     = Path("/tmp/roomba_frames")
-LOG_FILE      = Path("/tmp/roomba_log.txt")
-STATE_FILE    = Path("/tmp/roomba_state.json")
-STRATEGY_FILE = Path("/tmp/roomba_strategy.json")
+FRAME_DIR          = Path("/tmp/roomba_frames")
+LOG_FILE           = Path("/tmp/roomba_log.txt")
+STATE_FILE         = Path("/tmp/roomba_state.json")
+STRATEGY_FILE      = Path("/tmp/roomba_strategy.json")
+BUMP_ANALYSIS_FILE = Path("/tmp/roomba_bump_analysis.json")
 
 FRAME_INTERVAL  = 0.5   # seconds between camera captures
 MIN_MOVE_CM     = 2.0   # minimum translation since last photo — skip if less
@@ -114,8 +116,10 @@ _state: dict = {
     "log_lines":       0,
 }
 
-odom         = OdometryTracker()
-map_recorder = MapRecorder()
+odom            = OdometryTracker()
+map_recorder    = MapRecorder()
+obstacle_memory = ObstacleMemory()
+_bump_analysis: list[dict] = []   # records for post-run analysis (see BUMP_ANALYSIS_FILE)
 
 # Set while vision is idle, cleared while a frame is being analysed.
 # Mover thread waits on this before each movement burst so the robot
@@ -534,6 +538,17 @@ def camera_thread():
                 map_recorder.record_yolo(rx, ry, rh,
                                          det["class_name"], det["position"],
                                          det.get("distance_cm"))
+                # Feed into obstacle memory so the robot remembers this object
+                # even after it enters the camera blind spot (~43 cm in front).
+                dist_cm = det.get("distance_cm")
+                if dist_cm is not None:
+                    x1, _y1, x2, _y2 = det["bbox_px"]
+                    cx_px      = (x1 + x2) / 2.0
+                    lateral_cm = (cx_px - 320.0) / 492.0 * dist_cm
+                    obstacle_memory.add(
+                        det["class_name"], dist_cm, lateral_cm,
+                        conf=det.get("confidence", 1.0),
+                    )
 
         # ── Door detection (fused) ────────────────────────────────────────
         yolo_doors = scene.get("yolo_doors", [])
@@ -683,10 +698,44 @@ def mover_thread():
                 log(f"[MOVER] bumper {bump_side} after {elapsed:.1f}s "
                     f"(~{elapsed*speed:.0f} cm)")
                 map_recorder.record_bump(odom.x, odom.y, odom.heading)
+                # If known obstacles were tracked in memory, record the discrepancy
+                # between expected distance and actual (0 — we hit it).
+                mem_snap = obstacle_memory.get_blocking()
+                if mem_snap["obstacles"]:
+                    record = {
+                        "timestamp":       time.time(),
+                        "bump_side":       bump_side,
+                        "robot_x":         round(odom.x, 1),
+                        "robot_y":         round(odom.y, 1),
+                        "robot_heading":   round(odom.heading, 1),
+                        "elapsed_s":       round(elapsed, 2),
+                        "known_obstacles": [
+                            {
+                                "class_name":    o["class_name"],
+                                "expected_dist_cm": round(o["d_fwd"], 1),
+                                "lateral_cm":    round(o["d_lat"], 1),
+                                "confidence":    round(o["conf"], 3),
+                                "age_s":         round(time.time() - o["ts"], 1),
+                            }
+                            for o in mem_snap["obstacles"]
+                        ],
+                    }
+                    _bump_analysis.append(record)
+                    log(
+                        f"[BUMP-ANALYSIS] hit known obstacle(s): "
+                        + ", ".join(
+                            f"{o['class_name']} expected≈{o['expected_dist_cm']:.0f}cm"
+                            for o in record["known_obstacles"]
+                        )
+                    )
+                # Clear memory so we don't keep blocking after turning away
+                obstacle_memory.clear()
                 state_set(pos_x=odom.x, pos_y=odom.y)
                 return f"bump_{bump_side}", elapsed
-            # Segment clean — commit to odometry
+            # Segment clean — commit to odometry and advance memory positions
+            seg_cm = speed * seg
             odom.forward(speed, seg)
+            obstacle_memory.update_forward(seg_cm)
             elapsed += seg
 
         state_set(pos_x=odom.x, pos_y=odom.y)
@@ -697,6 +746,8 @@ def mover_thread():
         _rest_photo_ready.clear()   # heading will change — existing photo is stale
         send_cmd(f"turn {deg:.0f}")
         odom.turn(deg)
+        obstacle_memory.update_turn(deg)
+        obstacle_memory.expire()
         state_set(heading=odom.heading)
         time.sleep(abs(deg) / 60.0 + 0.3)
 
@@ -931,9 +982,17 @@ def mover_thread():
                 speed = MOVE_SPEED
                 burst = MOVE_BURST
 
-            # Proactive avoidance: check map then live camera
+            # Proactive avoidance: check map, memory, then live camera
             blocked    = state_get("blocked") or {}
             nearest_cm = state_get("nearest_cm")
+            mem = obstacle_memory.get_blocking()
+            if mem["obstacles"]:
+                for side, val in mem["blocked"].items():
+                    if val:
+                        blocked[side] = True
+                if mem["nearest_cm"] is not None:
+                    if nearest_cm is None or mem["nearest_cm"] < nearest_cm:
+                        nearest_cm = mem["nearest_cm"]
             map_obs    = map_recorder.obstacles_ahead(
                 odom.x, odom.y, odom.heading,
                 look_dist_cm=MAP_AVOID_DIST_CM,
@@ -1001,6 +1060,25 @@ def mover_thread():
             nearest_cm = state_get("nearest_cm")
             clear_path = state_get("clear_path")
             open_space = state_get("open_space") or {}
+
+            # Merge blind-spot memory: obstacles remembered from recent frames
+            # that are now within ~43 cm of the robot front (no longer visible).
+            mem = obstacle_memory.get_blocking()
+            if mem["obstacles"]:
+                mem_labels = ", ".join(
+                    f"{o['class_name']}@{o['d_fwd']:.0f}cm" for o in mem["obstacles"]
+                )
+                log(f"[MEM] blind-spot obstacles: {mem_labels}")
+                for side, val in mem["blocked"].items():
+                    if val:
+                        blocked[side] = True
+                if mem["nearest_cm"] is not None:
+                    if nearest_cm is None or mem["nearest_cm"] < nearest_cm:
+                        nearest_cm = mem["nearest_cm"]
+                # Recompute clear_path with memory merged in
+                clear_path = next(
+                    (c for c in ("center", "right", "left") if not blocked[c]), None
+                )
 
             ol = open_space.get("left",   0.0)
             oc = open_space.get("center", 0.0)
@@ -1253,6 +1331,15 @@ def main():
         speak(f"Run complete. Map saved.")
     except Exception as e:
         log(f"Map save failed: {e}")
+
+    if _bump_analysis:
+        try:
+            BUMP_ANALYSIS_FILE.write_text(json.dumps(_bump_analysis, indent=2))
+            log(f"Bump analysis saved: {BUMP_ANALYSIS_FILE} ({len(_bump_analysis)} record(s))")
+        except Exception as e:
+            log(f"Bump analysis save failed: {e}")
+    else:
+        log("Bump analysis: no known-obstacle bumps recorded this run.")
 
     speak("Exploration complete.")
 

@@ -12,6 +12,7 @@ Main entry point: analyze_scene(img_bgr, prev_img, baseline_cm) → scene dict.
 
 import math
 import threading
+import time
 from pathlib import Path
 
 import cv2
@@ -30,8 +31,13 @@ _door_yolo_session = None
 _DOOR_YOLO_SIZE  = 640
 
 # ── Camera intrinsics ─────────────────────────────────────────────────────────
-# Pi Camera v2/v3, 640×480, horizontal FOV ≈ 66°
+# IMX708 full-sensor 2304×1296, downscaled to 640×480 for inference.
+# hFOV = 66° → FOCAL_PX = (640/2) / tan(33°) = 492 px  (horizontal axis, correct)
+# vFOV = 40.1° (from 16:9 sensor geometry, ±20.1° from horizontal)
+# Camera tilt: 0° (horizontal).  Blind spot in front of robot ≈ 43 cm.
 FOCAL_PX          = 492.0
+FOCAL_PX_V        = 655.0    # vertical focal length in 640×480 (stretched from 16:9→4:3)
+CAMERA_TILT_DEG   = 0.0      # degrees above horizontal (positive = tilted up)
 DOOR_WIDTH_CM     = 80.0
 CAMERA_HEIGHT_CM  = 20.0     # camera is ~20 cm off the floor
 ROBOT_WIDTH_CM    = 40.0     # Roomba diameter ≈ 2 × camera height
@@ -50,6 +56,134 @@ CHAIR_PAIR_MAX_CM = 80.0    # real-world gap below which two legs are treated as
 LEG_MAX_DIST_CM   = 200.0   # don't block navigation for legs further than this
 STUCK_BASELINE_CM = 20.0
 STUCK_FLOW_PX     = 3.0
+
+# ── Blind-spot / obstacle memory constants ────────────────────────────────────
+BLIND_SPOT_CM     = 43.0   # closest floor point visible from camera (horizontal, 20cm height)
+MEMORY_TIMEOUT_S  = 25.0   # forget obstacles not refreshed within this time
+MEMORY_SAFETY_CM  = 20.0   # extra buffer beyond blind spot edge before expiring forward
+ROOMBA_RADIUS_CM  = 20.0   # half the Roomba diameter — obstacle is "passed" once behind this
+
+
+class ObstacleMemory:
+    """
+    Tracks recently detected obstacles in robot-local 2D coordinates so they
+    remain "visible" even after they enter the camera blind spot (~43 cm in
+    front of the robot where the floor is no longer in frame).
+
+    Coordinate system (robot frame):
+      d_fwd  — distance forward from robot centre (cm); positive = in front
+      d_lat  — lateral offset from robot centre (cm); positive = right of robot
+
+    After each movement the caller must call update_forward() / update_turn()
+    so positions stay accurate.  Obstacles expire once clearly passed or stale.
+    """
+
+    def __init__(self) -> None:
+        self._obs: list[dict] = []
+        self._lock = threading.Lock()
+
+    def add(self, class_name: str, distance_cm: float, lateral_cm: float,
+            conf: float = 1.0) -> None:
+        """Record a detected obstacle.  Merges with a nearby existing entry of
+        the same class rather than duplicating (within 30 cm in both axes)."""
+        now = time.time()
+        with self._lock:
+            for obs in self._obs:
+                if (obs["class_name"] == class_name
+                        and abs(obs["d_fwd"] - distance_cm) < 30
+                        and abs(obs["d_lat"] - lateral_cm) < 30):
+                    obs["d_fwd"] = distance_cm
+                    obs["d_lat"] = lateral_cm
+                    obs["conf"]  = conf
+                    obs["ts"]    = now
+                    return
+            self._obs.append({
+                "class_name": class_name,
+                "d_fwd":      distance_cm,
+                "d_lat":      lateral_cm,
+                "conf":       conf,
+                "ts":         now,
+            })
+
+    def update_forward(self, cm: float) -> None:
+        """Robot moved forward cm — reduce all forward distances accordingly."""
+        with self._lock:
+            for obs in self._obs:
+                obs["d_fwd"] -= cm
+
+    def update_turn(self, deg: float) -> None:
+        """Robot turned deg (+CCW/left, -CW/right) — rotate all positions.
+
+        When the robot turns CCW (left) by θ, every obstacle appears to shift
+        clockwise in the robot frame:
+            new_d_fwd = d_fwd·cos θ  −  d_lat·sin θ
+            new_d_lat = d_fwd·sin θ  +  d_lat·cos θ
+        """
+        theta = math.radians(deg)
+        cos_t, sin_t = math.cos(theta), math.sin(theta)
+        with self._lock:
+            for obs in self._obs:
+                d, x = obs["d_fwd"], obs["d_lat"]
+                obs["d_fwd"] = d * cos_t - x * sin_t
+                obs["d_lat"] = d * sin_t + x * cos_t
+
+    def expire(self) -> None:
+        """Remove obstacles that have been passed or not refreshed recently."""
+        now = time.time()
+        with self._lock:
+            self._obs = [
+                o for o in self._obs
+                if o["d_fwd"] > -ROOMBA_RADIUS_CM          # not yet passed
+                and now - o["ts"] < MEMORY_TIMEOUT_S       # not stale
+            ]
+
+    def clear(self) -> None:
+        """Discard all stored obstacles (e.g. after a bump clears the path)."""
+        with self._lock:
+            self._obs.clear()
+
+    def get_blocking(self) -> dict:
+        """Return blocking info for obstacles within or near the blind spot.
+
+        Only reports obstacles whose d_fwd is within BLIND_SPOT_CM + MEMORY_SAFETY_CM
+        (i.e. either in the blind spot already, or close enough that they will enter
+        it before the next camera frame can re-detect them).
+
+        Returns a dict compatible with analyze_obstacles output:
+            blocked     — {left, center, right}
+            nearest_cm  — closest obstacle d_fwd, or None
+            obstacles   — list of raw memory entries (for logging)
+        """
+        blocked: dict[str, bool] = {"left": False, "center": False, "right": False}
+        nearest_cm: float | None = None
+        in_blind: list[dict] = []
+
+        concern_dist = BLIND_SPOT_CM + MEMORY_SAFETY_CM
+        robot_half   = ROBOT_WIDTH_CM / 2.0
+
+        with self._lock:
+            for obs in self._obs:
+                d = obs["d_fwd"]
+                if d <= 0 or d > concern_dist:
+                    continue  # behind robot, or still clearly visible to camera
+                x = obs["d_lat"]
+                if abs(x) > ROBOT_WIDTH_CM * 1.5:
+                    continue  # well to the side — not in travel path
+
+                side = ("right" if x >  robot_half / 2
+                        else "left"  if x < -robot_half / 2
+                        else "center")
+                blocked[side] = True
+                if nearest_cm is None or d < nearest_cm:
+                    nearest_cm = d
+                in_blind.append(dict(obs))
+
+        return {"blocked": blocked, "nearest_cm": nearest_cm, "obstacles": in_blind}
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._obs)
+
 
 # ── Hailo model specs ─────────────────────────────────────────────────────────
 _MDIR = Path("/usr/share/hailo-models")
@@ -489,9 +623,8 @@ def floor_plane_depth(y_base: float, y_horizon: float) -> float | None:
     """
     Metric distance to a floor-contact point via camera height + pixel row.
 
-    For a camera at CAMERA_HEIGHT_CM above the floor looking roughly
-    horizontally, a point on the floor at pixel row y_base is at:
-        d = CAMERA_HEIGHT_CM × FOCAL_PX / (y_base − y_horizon)
+    Uses FOCAL_PX_V (vertical focal length in the 640×480 image, accounting for
+    the 16:9→4:3 stretch) rather than the horizontal FOCAL_PX.
 
     Returns None when y_base is at or above the horizon (object too far),
     or when the implied distance exceeds 800 cm (formula unreliable).
@@ -499,7 +632,7 @@ def floor_plane_depth(y_base: float, y_horizon: float) -> float | None:
     dy = y_base - y_horizon
     if dy < 2:
         return None
-    d = CAMERA_HEIGHT_CM * FOCAL_PX / dy
+    d = CAMERA_HEIGHT_CM * FOCAL_PX_V / dy
     return round(d, 1) if d <= 800 else None
 
 

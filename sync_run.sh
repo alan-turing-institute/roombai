@@ -38,6 +38,7 @@ while [[ ! -f "$STOP_FILE" ]]; do
         "$PI_HOST:/tmp/roomba_current.jpg" \
         "$PI_HOST:/tmp/pilot.log" \
         "$PI_HOST:/tmp/speak_queue.txt" \
+        "$PI_HOST:/tmp/roomba_bump_analysis.json" \
         "$RUN_DIR/"
 
     # ── Frames: incremental — never re-download a file already present ─────
@@ -78,6 +79,7 @@ rsync_pi \
     "$PI_HOST:/tmp/roomba_current.jpg" \
     "$PI_HOST:/tmp/pilot.log" \
     "$PI_HOST:/tmp/speak_queue.txt" \
+    "$PI_HOST:/tmp/roomba_bump_analysis.json" \
     "$RUN_DIR/"
 
 rsync_pi --ignore-existing \
