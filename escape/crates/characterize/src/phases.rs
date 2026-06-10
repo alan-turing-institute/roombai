@@ -415,10 +415,15 @@ pub fn floor_traverse<T: Read + Write>(ctx: &mut Ctx<T>, caps: &Caps) {
 // 90 * TURN_ENC_PER_REAL_DEG, i.e. it deliberately lets the encoder run past 90
 // to land a true 90. Measure the residual home offset to refine the factor.
 
-/// Encoder-degrees logged per real degree of body rotation, from S1: the spins
-/// stopped at ~359° encoder having physically turned ~320°. Edit this after
-/// measuring S2's home offset to re-tune (larger -> turns further per corner).
-const TURN_ENC_PER_REAL_DEG: f64 = 359.0 / 320.0; // ≈ 1.122
+/// Encoder-degrees logged per real degree of body rotation. S1 first put this at
+/// 359/320 ≈ 1.122 (a full turn read ~359° encoder having physically swept ~320°).
+/// S2 then drove a 1 m square with that factor (turn target ~101° encoder) and the
+/// robot finished ~20 cm past home turned ~25° too far overall — i.e. each of the
+/// four corners over-rotated ~6.25° (swept ~96.25° instead of 90°). So at a 101°
+/// encoder target the body really turned 96.25°, a true ratio of 101/96.25 ≈ 1.049.
+/// Lowering the factor stops each corner sooner. Re-tune after the next S2 run
+/// (larger -> turns further per corner; smaller -> turns less).
+const TURN_ENC_PER_REAL_DEG: f64 = 1.049;
 
 pub fn square_run<T: Read + Write>(ctx: &mut Ctx<T>, caps: &Caps) {
     let turn_target = 90.0 * TURN_ENC_PER_REAL_DEG;
