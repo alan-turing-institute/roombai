@@ -348,13 +348,13 @@ _TMP_FRAME     = Path("/tmp/roomba_current.tmp.jpg")
 
 
 def capture_frame(path: Path) -> bool:
-    # 1280×720 uses a wider sensor crop than 640×480 (which centre-crops the
-    # Pi Camera sensor), giving a broader field of view.  Full-res is kept on
-    # disk for viewing; vision code downscales to 640×480 before processing.
+    # 2304×1296 is the IMX708 full-sensor mode (66° FOV).  1280×720 and below
+    # all select the centre-crop mode (~46° FOV).  Full-res kept on disk;
+    # vision downscales to 640×480, keeping FOCAL_PX=492 (calibrated for 66°).
     try:
         r = subprocess.run(
             ["rpicam-still", "--nopreview",
-             "--width", "1280", "--height", "720",
+             "--width", "2304", "--height", "1296",
              "-o", str(path), "-t", "500"],
             capture_output=True, timeout=5,
         )
