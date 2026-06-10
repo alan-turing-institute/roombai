@@ -348,18 +348,18 @@ _TMP_FRAME     = Path("/tmp/roomba_current.tmp.jpg")
 
 
 def capture_frame(path: Path) -> bool:
+    # 1280×720 uses a wider sensor crop than 640×480 (which centre-crops the
+    # Pi Camera sensor), giving a broader field of view.  Full-res is kept on
+    # disk for viewing; vision code downscales to 640×480 before processing.
     try:
         r = subprocess.run(
             ["rpicam-still", "--nopreview",
-             "--width", "640", "--height", "480",
+             "--width", "1280", "--height", "720",
              "-o", str(path), "-t", "500"],
             capture_output=True, timeout=5,
         )
         if r.returncode != 0:
             return False
-        # rpicam-still can return 0 before the ISP pipeline finishes flushing
-        # the file.  A valid 640×480 JPEG is always several kilobytes; anything
-        # smaller means the write was not complete.
         try:
             size = path.stat().st_size
         except OSError:
@@ -444,6 +444,11 @@ def camera_thread():
         curr_img = cv2.imread(str(path))
         if curr_img is None:
             continue
+
+        # Downscale to 640×480 for vision — keeps FOCAL_PX calibration valid.
+        # The full-res 1280×720 file stays on disk for viewing/analysis.
+        if curr_img.shape[1] != 640:
+            curr_img = cv2.resize(curr_img, (640, 480))
 
         curr_odom = odom.snapshot()
 
