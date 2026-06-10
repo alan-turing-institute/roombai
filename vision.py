@@ -352,7 +352,10 @@ def _hailo_infer(name: str, img_bgr: np.ndarray) -> dict[str, np.ndarray] | None
         inp     = np.expand_dims(rgb, 0).astype(np.uint8)
         with m["ng"].activate(m["params"]):
             with InferVStreams(m["ng"], m["in_p"], m["out_p"]) as pipe:
-                return pipe.infer({m["in_name"]: inp})
+                raw = pipe.infer({m["in_name"]: inp})
+                # pipe.infer() may return lists instead of ndarray; normalise here
+                return {k: np.array(v) if not isinstance(v, np.ndarray) else v
+                        for k, v in raw.items()}
     except Exception as e:
         print(f"[vision] {name} infer error: {e}")
         return None
