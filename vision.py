@@ -37,7 +37,10 @@ CAMERA_HEIGHT_CM  = 20.0     # camera is ~20 cm off the floor
 ROBOT_WIDTH_CM    = 40.0     # Roomba diameter ≈ 2 × camera height
 OBSTACLE_BLOCK_DIST_CM = 200.0
 # Chair leg detection (thin near-vertical structures in the floor region)
-CHAIR_BBOX_EXPAND = 0.12    # expand detected chair x-extent by this fraction of frame width on each side
+CHAIR_BBOX_EXPAND = 0.20    # expand detected chair x-extent by this fraction of frame width on each side
+# Classes whose ground footprint must be fully respected (camera looks up — seat
+# appears high in frame but the floor area under/around it is still off-limits).
+FLOOR_BLOCKER_CLASSES = {"chair", "couch", "dining table"}
 LEG_FLOOR_FRAC    = 0.45    # analyse bottom LEG_FLOOR_FRAC of frame for legs
 LEG_MIN_LENGTH    = 0.25    # min leg segment as fraction of floor-region height
 LEG_MAX_SLOPE     = 0.15    # max |dx/dy| to count as near-vertical
@@ -836,24 +839,42 @@ def analyze_obstacles(
         dist   = det.get("distance_cm") or scene_depth_cm
         real_h = det.get("real_height_cm")
 
-        # Chairs: YOLO boxes the seat but the legs extend to the floor and
-        # spread wider than the seat.  Expand the x-extent and always treat
-        # as floor-level so the mover keeps clear of the whole leg footprint.
-        is_chair = det.get("class_name") == "chair"
-        if is_chair:
+        class_name   = det.get("class_name", "")
+        is_floor_obj = class_name in FLOOR_BLOCKER_CLASSES
+
+        # Floor objects (chairs, couches, tables): expand x-extent to cover the
+        # full ground footprint, and always treat as floor-level.  The camera
+        # looks upward so the seat appears high in frame — the area beneath it
+        # is still off-limits.
+        if is_floor_obj:
             margin = int(frame_w * CHAIR_BBOX_EXPAND)
             x1 = max(0, x1 - margin)
             x2 = min(frame_w, x2 + margin)
 
-        at_floor     = is_chair or (y2 > floor_threshold)
+        # Persons always occupy floor space regardless of where they appear in
+        # the frame (upward camera may not capture their feet).
+        is_person    = class_name == "person"
+        at_floor     = is_floor_obj or is_person or (y2 > floor_threshold)
         within_range = dist is None or dist < OBSTACLE_BLOCK_DIST_CM
         blocking     = at_floor and within_range
 
         enriched.append({**det, "blocking": blocking, "distance_cm": dist, "real_height_cm": real_h})
         if blocking:
-            blocked[det["position"]] = True
             if dist is not None and (nearest_cm is None or dist < nearest_cm):
                 nearest_cm = dist
+
+            if is_floor_obj:
+                # Block every frame-third that the expanded bbox overlaps —
+                # the ground footprint under the chair/couch may span all three.
+                third = frame_w / 3
+                for side, (lo, hi) in [("left",   (0,       third)),
+                                        ("center", (third,   2 * third)),
+                                        ("right",  (2 * third, frame_w))]:
+                    if x1 < hi and x2 > lo:
+                        blocked[side] = True
+            else:
+                blocked[det["position"]] = True
+
             # Lateral clearance: if the gap between this obstacle and the frame
             # edge is narrower than the robot, that side is also impassable.
             if dist and dist > 0:
