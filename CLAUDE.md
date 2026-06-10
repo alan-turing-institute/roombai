@@ -34,7 +34,7 @@ Send commands via: `./roomba_pilot/target/debug/pilot send "<command>"`
 
 ## Camera
 
-Use `rpicam-still` to capture frames. The camera is mounted **upside down** — account for this when interpreting images.
+Use `rpicam-still` to capture frames.
 
 ---
 

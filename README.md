@@ -1,6 +1,6 @@
 # RoombaI — Escape Room Competition
 
-A competition where each participant programs a Claude AI agent to control a Roomba robot and escape a room through an open door as fast as possible. The robot has a camera mounted on it (upside down) and Claude controls it by issuing pilot commands.
+A competition where each participant programs a Claude AI agent to control a Roomba robot and escape a room through an open door as fast as possible. The robot has a camera mounted on it and Claude controls it by issuing pilot commands.
 
 Each attempt lasts **10 minutes maximum**. If the robot hasn't escaped by then, the run is recorded as DNF.
 
@@ -144,8 +144,6 @@ Commands are sent via: `./roomba_pilot/target/debug/pilot send "<command>"`
 | `ping` | Health check |
 | `shutdown` | Stop, return to passive, exit daemon |
 
-The camera is mounted **upside down** — account for this when interpreting images.
-
 ---
 
 ## Strategy example
@@ -161,7 +159,6 @@ When asked to escape the room, act as Orchestrator and run the following loop:
 Spin 360° in place, capturing a frame every 30° (12 frames total).
 Analyse all frames to find the door:
 - Look for a rectangular gap in the wall, change in flooring, or open space
-- The camera is upside down — flip interpretation accordingly
 - Estimate door bearing relative to current heading (0° = forward)
 - Log: `scout: door_bearing=<deg> confidence=<0-1>`
 
