@@ -76,7 +76,7 @@ At the end of the run:
 
 ---
 
-## Escape Strategy — "Drive blind, look only when you hit something"
+## Escape Strategy — "Drive blind, look only when you hit something, remember where you've been"
 
 You have 10 minutes. **Moving forward is the only thing that finds the door.** Rotating
 and photographing make zero progress — treat them as a cost, not a default. Obey these
@@ -87,23 +87,41 @@ rules mechanically; do **not** deliberate or re-confirm with extra photos.
 - Aggressive forward leg: `forward 40 3` (≈120 cm at 40 cm/s — faster than `move`).
 - Bump check (instant, free, text): `bumps`. **Use this, not the camera, to navigate.**
 - The camera is consulted **only at a bump**, to pick a new heading. Nowhere else.
+- **Heading memory (your map):** `./scripts/track.sh` records which compass direction you've
+  explored. There is no odometry, so it tracks heading + a coarse per-direction coverage tally.
+  After every motion command, update it in the SAME bash line:
+  - after a forward leg: `./scripts/track.sh fwd 120` (use the cm you actually drove)
+  - after a turn: `./scripts/track.sh turn -90` (same signed degrees you sent to `turn`)
+  - at a bump: `./scripts/track.sh block` (marks this direction as walled)
+  - when choosing where to go: `./scripts/track.sh suggest` prints the turn toward the
+    least-explored open direction.
 
 ### Opening (do this once, ~first 30 s)
 
 1. `safe`, then capture ONE frame.
 2. If the door/opening is visible, turn to face it and skip to the main loop driving at it.
-   Otherwise turn so a wall is on your **right**, and start wall-following.
+   Otherwise drive toward the most open direction you see.
 
 ### Main loop (repeat until escaped or time is up)
 
-1. **Drive:** `forward 40 3`. Do NOT photograph first.
-2. **Check `bumps`** (text only):
-   - **No bump →** go straight back to step 1 and drive again. Do not photograph, do not
-     think, do not turn. Keep crossing the room.
-   - **Bump →** this is the _only_ kind of decision point. Now capture a frame.
-3. **At a bump:** `move -20` (back off), then `turn -90` (turn right, wall-following),
-   then go to step 1. If you bump again immediately, increase the turn (`turn -120`).
-4. **Door spotted in a bump frame:** abandon wall-following and drive straight at it with
+1. **Drive, then check bumps in one line:** `pilot send "forward 40 3" && pilot send "bumps"`.
+   Do NOT photograph first. Credit the map only *after* you know whether you bumped (step 2),
+   so a leg that stalled against a wall isn't recorded as full distance traveled.
+2. **Read the `bumps` result:**
+   - **No bump →** the full leg went through: `./scripts/track.sh fwd 120`, then go straight
+     back to step 1 and drive again. Do not photograph, do not think, do not turn. Keep crossing.
+   - **Bump →** you stalled partway, so credit only the partial distance and mark the wall:
+     `./scripts/track.sh fwd 40 && ./scripts/track.sh block`. Then `move -20` to back off and
+     capture a frame. This is the _only_ kind of decision point.
+3. **Choose a turn at the bump — vision first, memory to break ties:**
+   - Look at the frame. If **LEFT or RIGHT is clearly more open**, turn ~90° toward that
+     open side. **Do not default to the same side every time** — that is what made earlier
+     runs miss the left half of the room. Let the picture decide.
+   - If both sides look similar, or you're in a corner / boxed in, run
+     `./scripts/track.sh suggest` and turn the degrees it reports — this steers you toward
+     the part of the room you've explored *least*.
+   - After turning, run `./scripts/track.sh turn <deg>` with the same angle, then go to step 1.
+4. **Door spotted in a bump frame:** abandon everything and drive straight at it with
    repeated `forward 45 3` legs until you cross the threshold.
 
 ### Hard rules (these fix the stalling)
@@ -111,12 +129,20 @@ rules mechanically; do **not** deliberate or re-confirm with extra photos.
 - **Never** take two photos without a forward leg in between.
 - **Never** turn more than once per bump. After any turn, the next command is a forward leg.
 - **Never** drive a leg shorter than 3 s unless escaping through a doorway.
+- **Never** blindly turn the same direction at every bump — pick the open side from the photo,
+  and when in doubt let `track.sh suggest` send you toward unexplored space.
 - A photo with no bump is forbidden — if you didn't hit anything, you have nothing to decide.
+
+### When you're stuck in one area
+
+If you bump 2–3 times in quick succession (a corner or cluttered pocket), stop wall-hugging:
+run `./scripts/track.sh suggest`, turn toward the least-explored direction, and commit a long
+`forward 45 4` leg to break out into open room before resuming the loop.
 
 ### Time ratchet (check elapsed via /tmp/run_state.env START_TIME)
 
 - 0–2 min: opening scan + start driving.
-- 2–7 min: pure bump-driven wall-following, minimal photos. Cross the whole room.
+- 2–7 min: bump-driven exploration, minimal photos, follow `suggest` toward fresh areas.
 - 7–10 min: longest legs (`forward 45 4`), commit to any opening; do not re-scan corners.
 
 ### Recording (keep it sparse)
