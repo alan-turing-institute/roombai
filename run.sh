@@ -77,7 +77,7 @@ echo ""
 echo "━━━ Step 6/8 — Launching Claude (10-minute limit) ━━━━━━━━━━━━━━━━━━━━━━"
 TIME_LIMIT_S=600   # 10 minutes
 echo "  Claude session is limited to $((TIME_LIMIT_S / 60)) minutes."
-echo "  After the limit it is stopped, the timelapse is stitched, and uploaded."
+echo "  After the limit it is stopped, finalised, and uploaded."
 
 # Run Claude under `timeout`: SIGTERM at the limit, SIGKILL 10 s later if it
 # hasn't exited. Don't let a non-zero exit abort the script — we still want to
@@ -101,25 +101,25 @@ else
     RUN_OUTCOME="dnf"
 fi
 
-# ── Step 7: stop the robot + finalise (stitch timelapse video) ───────────────
+# ── Step 7: stop the robot + finalise ────────────────────────────────────────
 echo ""
 echo "━━━ Step 7/8 — Finalising attempt ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 # Halt the robot in case it was mid-motion when Claude was stopped.
 ( cd "${REPO_ROOT}/roomba_pilot" && ./target/debug/pilot send "stop" >/dev/null 2>&1 ) || true
 
-# Claude normally calls finish_run.sh itself at the end of /escape (which stitches
-# the timelapse and writes metadata). If it was stopped early it won't have, so
-# we stitch the video here — but only if it doesn't already exist, to avoid
-# clobbering a clean outcome Claude already recorded.
+# Claude normally calls finish_run.sh itself at the end of /escape (which writes
+# metadata). If it was stopped early it won't have, so we write it here — but
+# only if it doesn't already exist, to avoid clobbering a clean outcome Claude
+# already recorded.
 ATTEMPT_DIR=""
 # shellcheck disable=SC1091
 [ -f /tmp/run_state.env ] && source /tmp/run_state.env
-if [ -n "${ATTEMPT_DIR}" ] && [ ! -f "${ATTEMPT_DIR}/timelapse.mp4" ]; then
-    echo "  No timelapse found — stitching it now (outcome: ${RUN_OUTCOME})..."
+if [ -n "${ATTEMPT_DIR}" ] && [ ! -f "${ATTEMPT_DIR}/metadata.json" ]; then
+    echo "  No metadata found — writing it now (outcome: ${RUN_OUTCOME})..."
     bash "${REPO_ROOT}/scripts/finish_run.sh" "${RUN_OUTCOME}" || \
         echo "  ⚠ finish_run.sh failed — uploading whatever exists."
 else
-    echo "✓ Timelapse already produced by Claude."
+    echo "✓ Metadata already produced by Claude."
 fi
 
 # ── Step 8: upload run artifacts to Azure Blob ───────────────────────────────

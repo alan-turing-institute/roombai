@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# finish_run.sh — stitch timelapse and write metadata at the end of an attempt.
+# finish_run.sh — write metadata at the end of an attempt.
 #
 # Usage (called by Claude at end of run):
 #   ./scripts/finish_run.sh escaped   # or: ./scripts/finish_run.sh dnf
@@ -20,12 +20,6 @@ fi
 source "$STATE_FILE"
 
 DURATION_S=$(( $(date +%s) - START_TIME ))
-
-# Stitch timelapse
-echo "Stitching timelapse..."
-ffmpeg -y -framerate 2 -pattern_type glob -i "${ATTEMPT_DIR}/frames/*.jpg" \
-  -c:v libx264 -pix_fmt yuv420p "${ATTEMPT_DIR}/timelapse.mp4" 2>/dev/null
-echo "✓ Timelapse saved to ${ATTEMPT_DIR}/timelapse.mp4"
 
 # Write metadata
 cat > "${ATTEMPT_DIR}/metadata.json" <<EOF

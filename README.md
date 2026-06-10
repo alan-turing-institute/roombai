@@ -10,7 +10,7 @@ Each attempt lasts **10 minutes maximum**. If the robot hasn't escaped by then, 
 
 1. You write an escape strategy in `CLAUDE.md` on your own branch
 2. You run `./run.sh` — it resets state, starts all daemons, launches Claude, and uploads results automatically
-3. Your run data (frames, timelapse, metadata) is uploaded to Azure Blob Storage
+3. Your run data (frames, metadata) is uploaded to Azure Blob Storage
 4. A leaderboard is built from everyone's uploaded results
 
 ---
@@ -28,7 +28,7 @@ cd roombai
 ```
 
 This will:
-- Install system dependencies (`rclone`, `ffmpeg`, `imagemagick`, `espeak-ng`)
+- Install system dependencies (`rclone`, `imagemagick`, `espeak-ng`)
 - Build the Rust pilot binary
 - Prompt you for your Azure Blob Storage account name and SAS token
 
@@ -86,7 +86,6 @@ escape_attempt_<commit>/
   │     ├── frame_0001.jpg    ← camera still with MM:SS overlay
   │     ├── frame_0002.jpg
   │     └── …
-  ├── timelapse.mp4           ← all frames stitched at 2fps
   └── metadata.json           ← pilot name, commit, duration, tool calls, outcome
 ```
 
@@ -118,7 +117,7 @@ roombai/
   └── scripts/
         ├── init_run.sh       ← creates attempt dir and state file (called by run.sh)
         ├── capture_frame.sh  ← captures a timestamped still (called by Claude)
-        ├── finish_run.sh     ← stitches timelapse and writes metadata (called by Claude)
+        ├── finish_run.sh     ← writes metadata (called by Claude)
         ├── reset_run.sh      ← wipes /tmp and Claude memory (called by run.sh)
         └── upload_run.sh     ← uploads attempt dir to Azure Blob (called by run.sh)
 ```
@@ -192,6 +191,6 @@ Call `./scripts/finish_run.sh dnf` and stop.
 
 - **Branch name = leaderboard name** — pick something recognisable, e.g. `alice/attempt-1`
 - **Narrate decisions** — `echo "your message" >> /tmp/speak_queue.txt` speaks aloud during the run, useful for debugging without looking at the screen
-- **Each frame is timestamped** — the timelapse shows exactly what the robot saw and when
+- **Each frame is timestamped** — the frames show exactly what the robot saw and when
 - **DNF runs still upload** — partial data is better than nothing; the leaderboard tracks all attempts
 - **Do not call any external LLM APIs** — there is no `ANTHROPIC_API_KEY` available

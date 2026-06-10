@@ -21,7 +21,6 @@ echo "━━━ Step 1/4 — Installing system dependencies ━━━━━━�
 sudo apt-get update -q
 sudo apt-get install -y \
     rclone \
-    ffmpeg \
     imagemagick \
     espeak-ng
 echo "✓ Dependencies installed"
@@ -80,7 +79,7 @@ fi
 echo ""
 echo "━━━ Step 4/4 — Verifying installation ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 ok=true
-for cmd in rclone ffmpeg convert espeak-ng cargo; do
+for cmd in rclone convert espeak-ng cargo; do
     if command -v "$cmd" &>/dev/null; then
         echo "  ✓ $cmd"
     else
