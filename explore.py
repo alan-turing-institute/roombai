@@ -539,6 +539,10 @@ def camera_thread():
         detected = door["door_visible"] and door.get("confidence", 0) >= DOOR_CONFIRM_MIN_CONF
         door_history.append(detected)
 
+        prev_detected = door_history[-2] if len(door_history) >= 2 else False
+        if detected and not prev_detected:
+            speak("Door in sight.")
+
         if detected:
             map_recorder.record_door(
                 odom.x, odom.y, odom.heading,
