@@ -59,7 +59,6 @@ STRATEGY_FILE = Path("/tmp/roomba_strategy.json")
 FRAME_INTERVAL  = 2.0   # seconds between camera captures
 MOVE_SPEED      = 35    # cm/s forward speed
 MOVE_BURST      = 3.0   # seconds per forward burst
-TURN_AFTER_BUMP = 90    # degrees to turn after bumping (always CW)
 SCAN_ROCK_CM    = 20    # forward distance (cm) rocked at each scan heading for flow depth
 
 DOOR_CONFIRM_FRAMES = 3
@@ -73,6 +72,12 @@ APPROACH_STOP_DIST  = 40   # cm — stop and declare arrival
 AVOID_STEER_DIST_CM = 120  # cm
 # Map-based avoidance: steer if a known map obstacle is closer than this
 MAP_AVOID_DIST_CM   = 150  # cm  (generous — odometry drifts so cone is wide)
+
+# Depth-based proactive steering thresholds.
+# Center open_space below DEPTH_CENTER_BLOCK → steer before moving.
+# A side must exceed the other by DEPTH_SIDE_MARGIN to prefer it over CW default.
+DEPTH_CENTER_BLOCK  = 0.40   # fast_depth open_space fraction; <this = likely blocked
+DEPTH_SIDE_MARGIN   = 0.12   # minimum advantage for a side to be preferred
 
 # ── Shared state ────────────────────────────────────────────────────────────
 _lock = threading.Lock()
@@ -834,17 +839,20 @@ def mover_thread():
             blocked    = state_get("blocked") or {}
             nearest_cm = state_get("nearest_cm")
             clear_path = state_get("clear_path")
+            open_space = state_get("open_space") or {}
+
+            ol = open_space.get("left",   0.0)
+            oc = open_space.get("center", 0.0)
+            or_ = open_space.get("right", 0.0)
 
             x, y = odom.x, odom.y
             log(
                 f"[MOVER] EXPLORE heading={odom.heading:.0f}° pos=({x:.0f},{y:.0f})cm "
-                f"blocked={blocked} nearest≈{nearest_cm}cm clear={clear_path}"
+                f"depth_open L={ol:.2f} C={oc:.2f} R={or_:.2f} "
+                f"nearest≈{nearest_cm}cm clear={clear_path}"
             )
 
-            # ── Map-based proactive avoidance ─────────────────────────────
-            # Query the historical map for known obstacles ahead before
-            # committing to a forward burst.  Odometry drifts, so the cone
-            # is generous (MAP_AVOID_DIST_CM × 55 cm wide).
+            # ── 1. Map-based avoidance (highest priority) ─────────────────
             map_obs = map_recorder.obstacles_ahead(
                 odom.x, odom.y, odom.heading,
                 look_dist_cm=MAP_AVOID_DIST_CM,
@@ -856,30 +864,65 @@ def mover_thread():
                     f"({len(map_obs)} map obstacle(s) in cone)"
                 )
                 speak(f"Map shows {nearest_map_ev.label} ahead. Steering around.")
-                deg = choose_avoid_turn(map_obs)
-                do_turn(deg)
-            # ── Real-time camera avoidance ─────────────────────────────────
+                do_turn(choose_avoid_turn(map_obs))
+
+            # ── 2. YOLO real-time avoidance ───────────────────────────────
             elif blocked.get("center") and nearest_cm and nearest_cm < AVOID_STEER_DIST_CM:
                 deg = choose_avoid_turn()
                 log(
-                    f"[MOVER] proactive avoid: obstacle in center at ≈{nearest_cm:.0f}cm "
-                    f"→ clear_path={clear_path}, turning {deg:+.0f}°"
+                    f"[MOVER] YOLO avoid: center blocked ≈{nearest_cm:.0f}cm "
+                    f"→ turning {deg:+.0f}°"
                 )
-                speak(f"Obstacle ahead at {int(nearest_cm)} centimetres. Steering {('right' if deg < 0 else 'left')}.")
+                speak(f"Obstacle at {int(nearest_cm)} centimetres. Steering.")
                 do_turn(deg)
-            elif blocked.get("center") and (nearest_cm is None or nearest_cm >= AVOID_STEER_DIST_CM):
-                log(f"[MOVER] obstacle in center but distant (≈{nearest_cm}cm) — continuing")
+
+            # ── 3. fast_depth proactive steering ─────────────────────────
+            # If the depth map shows center is mostly blocked, steer toward
+            # whichever side has more open space BEFORE driving into it.
+            # This is the primary corridor-finding mechanism when YOLO is
+            # unavailable or no COCO objects are ahead.
+            elif oc < DEPTH_CENTER_BLOCK:
+                if ol > or_ + DEPTH_SIDE_MARGIN:
+                    deg = +60.0   # turn CCW toward open left
+                elif or_ > ol + DEPTH_SIDE_MARGIN:
+                    deg = -60.0   # turn CW toward open right
+                else:
+                    deg = -90.0   # both sides equal, default CW
+                log(
+                    f"[MOVER] depth steer: center={oc:.2f} (blocked) "
+                    f"L={ol:.2f} R={or_:.2f} → {deg:+.0f}°"
+                )
+                speak(f"Depth shows center blocked. Steering {'left' if deg > 0 else 'right'}.")
+                do_turn(deg)
 
             status, _ = do_forward(MOVE_SPEED, MOVE_BURST)
 
             if status.startswith("bump"):
                 side = "right" if "R" in status else "left"
-                log(f"[MOVER] bump {side} at heading={odom.heading:.0f}°")
-                speak("Bump. Turning right.")
                 state_set(bumps=state_get("bumps") + 1)
-                # Back off safely — path behind is clear (we just came from there)
-                do_reverse_safe(17.5, skip_check=True)
-                do_turn(-TURN_AFTER_BUMP)   # always CW for consistent wall-following
+                # Back off far enough to have room to turn
+                do_reverse_safe(25, skip_check=True)
+                # Choose turn direction from fresh depth map: prefer the side
+                # with more open space; fall back to CW only when both sides
+                # look equally blocked.
+                open_space = state_get("open_space") or {}
+                ol2  = open_space.get("left",   0.0)
+                or2_ = open_space.get("right",  0.0)
+                if ol2 > or2_ + DEPTH_SIDE_MARGIN:
+                    turn_deg = +90.0   # CCW toward open left
+                    dir_str  = "left (depth)"
+                elif or2_ > ol2 + DEPTH_SIDE_MARGIN:
+                    turn_deg = -90.0   # CW toward open right
+                    dir_str  = "right (depth)"
+                else:
+                    turn_deg = -90.0   # default CW
+                    dir_str  = "right (default)"
+                log(
+                    f"[MOVER] bump {side} heading={odom.heading:.0f}° "
+                    f"depth L={ol2:.2f} R={or2_:.2f} → turning {dir_str}"
+                )
+                speak(f"Bump. Turning {dir_str.split()[0]}.")
+                do_turn(turn_deg)
                 _bumps_since_scan += 1
                 if _bumps_since_scan >= SCAN_EVERY_BUMPS:
                     _bumps_since_scan = 0

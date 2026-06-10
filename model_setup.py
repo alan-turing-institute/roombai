@@ -377,8 +377,31 @@ def ensure_models(abort_if_required_missing: bool = True) -> dict[str, bool]:
         if hef_path is not None:
             # Update MODEL_SPECS so vision.py uses the resolved path
             MODEL_SPECS[name]["hef"] = hef_path
-            readiness[name] = True
-            _log(f"{name}: READY  {status}")
+            # ── Live inference smoke-test ────────────────────────────────────
+            # Validating the HEF file alone does NOT catch SDK API changes.
+            # Run a dummy 1×1 image through the model to prove inference works.
+            _log(f"{name}: running live inference smoke-test…")
+            try:
+                import numpy as np
+                from vision import init_all_models, _hailo_infer
+                init_all_models()
+                dummy = np.zeros((1, 1, 3), dtype=np.uint8)
+                result = _hailo_infer(name, dummy)
+                if result is None:
+                    raise RuntimeError("infer returned None")
+                readiness[name] = True
+                _log(f"{name}: READY  {status}  (inference OK)")
+            except Exception as e:
+                _log(f"{name}: HEF file present but inference FAILED — {e}")
+                readiness[name] = False
+                info = MODEL_ZOO_INFO[name]
+                if info.get("required") and abort_if_required_missing:
+                    _speak(f"Required model {name} inference failed. Cannot start.")
+                    _log(
+                        f"\nFATAL: {name} HEF loaded but inference threw an error.\n"
+                        f"Check SDK compatibility. Error: {e}"
+                    )
+                    sys.exit(1)
         else:
             readiness[name] = False
             _log(f"{name}: MISSING  {status}")
