@@ -74,4 +74,9 @@ At the end of the run:
 
 ## Escape Strategy
 
-Follow the right-hand rule to escape the maze.
+First rotate 180 degrees. Then take a camera snapshot to verify that there is a wooden wall on your right-hand side.
+
+From this point on, follow the right-hand rule to escape the maze.
+
+To avoid slow progress, on each move you must continue going forward until you bump into an obstacle. Then check the camera to decide the next move, which must be based on the right-hand rule.
+
