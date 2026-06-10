@@ -65,6 +65,9 @@ SCAN_ROCK_CM    = 20    # forward distance (cm) rocked at each scan heading for 
 DOOR_CONFIRM_FRAMES = 3    # positives needed to trigger approach
 DOOR_CONFIRM_WINDOW = 7    # sliding window length in frames (~14 s at 2 s/frame)
 DOOR_CONFIRM_MIN_CONF = 0.10   # ignore detections below this confidence
+
+CORNER_PROGRESS_CM  = 35   # min displacement (cm) between bumps to reset corner counter
+CORNER_ESCAPE_BUMPS = 3    # consecutive stuck bumps before executing corner escape
 SCAN_EVERY_BUMPS = 6           # pause for a 360° scan every N bumps
 MAP_SAVE_INTERVAL = 30         # seconds between periodic map saves
 APPROACH_SLOW_DIST  = 150  # cm — half-speed below this
@@ -562,6 +565,11 @@ def mover_thread():
     _approach_bumps    = 0
     _consecutive_stuck = 0
     _bumps_since_scan  = 0
+    # Corner escape state
+    _default_turn_sign = -1    # -1=CW, +1=CCW; flips each time it's used with no depth preference
+    _corner_bump_count = 0     # bumps without CORNER_PROGRESS_CM of displacement
+    _corner_ref_x      = 0.0  # odometry position when the current bump streak began
+    _corner_ref_y      = 0.0
 
     _FORWARD_SEG_S = 0.3   # seconds per forward segment for bump-interruptible driving
 
@@ -889,7 +897,8 @@ def mover_thread():
                 elif or_ > ol + DEPTH_SIDE_MARGIN:
                     deg = -60.0   # turn CW toward open right
                 else:
-                    deg = -90.0   # both sides equal, default CW
+                    deg = 90.0 * _default_turn_sign   # alternating when equal
+                    _default_turn_sign *= -1
                 log(
                     f"[MOVER] depth steer: center={oc:.2f} (blocked) "
                     f"L={ol:.2f} R={or_:.2f} → {deg:+.0f}°"
@@ -902,29 +911,59 @@ def mover_thread():
             if status.startswith("bump"):
                 side = "right" if "R" in status else "left"
                 state_set(bumps=state_get("bumps") + 1)
+
+                # Progress check: if we've moved far enough since the streak
+                # started, reset the corner counter and update the reference.
+                displacement = math.hypot(odom.x - _corner_ref_x,
+                                          odom.y - _corner_ref_y)
+                if displacement >= CORNER_PROGRESS_CM:
+                    _corner_bump_count = 0
+                    _corner_ref_x, _corner_ref_y = odom.x, odom.y
+                _corner_bump_count += 1
+
                 # Back off far enough to have room to turn
                 do_reverse_safe(25, skip_check=True)
-                # Choose turn direction from fresh depth map: prefer the side
-                # with more open space; fall back to CW only when both sides
-                # look equally blocked.
-                open_space = state_get("open_space") or {}
-                ol2  = open_space.get("left",   0.0)
-                or2_ = open_space.get("right",  0.0)
-                if ol2 > or2_ + DEPTH_SIDE_MARGIN:
-                    turn_deg = +90.0   # CCW toward open left
-                    dir_str  = "left (depth)"
-                elif or2_ > ol2 + DEPTH_SIDE_MARGIN:
-                    turn_deg = -90.0   # CW toward open right
-                    dir_str  = "right (depth)"
+
+                if _corner_bump_count >= CORNER_ESCAPE_BUMPS:
+                    # ── Corner escape ─────────────────────────────────────
+                    # No progress in CORNER_ESCAPE_BUMPS bumps — we're trapped.
+                    # Extra reverse + large turn in the opposite of the last
+                    # default direction, then drive forward to leave the corner.
+                    escape_deg = 150.0 * (-_default_turn_sign)
+                    log(
+                        f"[MOVER] CORNER ESCAPE: {_corner_bump_count} bumps, "
+                        f"{displacement:.0f}cm from ref → {escape_deg:+.0f}°"
+                    )
+                    speak("Stuck in corner. Escaping.")
+                    do_reverse_safe(20, skip_check=True)   # 45 cm total
+                    do_turn(escape_deg)
+                    do_forward(MOVE_SPEED, 60.0 / MOVE_SPEED)   # drive 60 cm clear
+                    _default_turn_sign *= -1
+                    _corner_bump_count  = 0
+                    _corner_ref_x, _corner_ref_y = odom.x, odom.y
                 else:
-                    turn_deg = -90.0   # default CW
-                    dir_str  = "right (default)"
-                log(
-                    f"[MOVER] bump {side} heading={odom.heading:.0f}° "
-                    f"depth L={ol2:.2f} R={or2_:.2f} → turning {dir_str}"
-                )
-                speak(f"Bump. Turning {dir_str.split()[0]}.")
-                do_turn(turn_deg)
+                    # ── Normal bump recovery ──────────────────────────────
+                    open_space = state_get("open_space") or {}
+                    ol2  = open_space.get("left",  0.0)
+                    or2_ = open_space.get("right", 0.0)
+                    if ol2 > or2_ + DEPTH_SIDE_MARGIN:
+                        turn_deg = +90.0
+                        dir_str  = "left (depth)"
+                    elif or2_ > ol2 + DEPTH_SIDE_MARGIN:
+                        turn_deg = -90.0
+                        dir_str  = "right (depth)"
+                    else:
+                        turn_deg = 90.0 * _default_turn_sign
+                        _default_turn_sign *= -1
+                        dir_str  = f"{'left' if turn_deg > 0 else 'right'} (alternating)"
+                    log(
+                        f"[MOVER] bump {side} heading={odom.heading:.0f}° "
+                        f"depth L={ol2:.2f} R={or2_:.2f} → turning {dir_str} "
+                        f"[corner {_corner_bump_count}/{CORNER_ESCAPE_BUMPS}]"
+                    )
+                    speak(f"Bump. Turning {dir_str.split()[0]}.")
+                    do_turn(turn_deg)
+
                 _bumps_since_scan += 1
                 if _bumps_since_scan >= SCAN_EVERY_BUMPS:
                     _bumps_since_scan = 0
