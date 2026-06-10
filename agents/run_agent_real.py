@@ -222,6 +222,7 @@ def run(
         obs = get_obs(tracker, sock)
         action, _ = model.predict(obs, deterministic=True)
         action_idx = int(action)
+        kind, _ = ACTION_EFFECTS[action_idx]
         _, pilot_cmd_str, description = ACTIONS[action_idx]
 
         try:
@@ -230,17 +231,37 @@ def run(
             print(f"[{step:4d}] command failed: {e}")
             break
 
-        tracker.apply_action(action_idx)
-        dist = tracker.distance_to_door
+        # For move commands, check whether the robot was physically blocked.
+        # If bumped, back off 10 cm and correct the tracker instead of applying
+        # the blocked forward move — prevents dead-reckoning from diverging.
+        bumped = False
+        if kind == "move":
+            try:
+                bumps_r = cmd(sock, "bumps")
+                bvals = re.findall(r"bump[LR]=(\d)", bumps_r)
+                bumped = any(v == "1" for v in bvals)
+            except Exception:
+                pass
 
-        print(
-            f"[{step:4d}] a={action_idx} {pilot_cmd_str:<12} {description:<14} "
-            f"dist={dist:.0f}mm  pos=({tracker.x:.0f},{tracker.y:.0f})  {resp}"
-        )
-
-        if dist < escape_dist_mm:
-            print(f"Reached Door 13! (dist={dist:.0f}mm < {escape_dist_mm:.0f}mm threshold)")
-            break
+        if bumped:
+            try:
+                cmd(sock, "move -10")   # back off 10 cm to relieve motors
+            except Exception:
+                pass
+            # Don't apply the blocked forward move; apply the 10 cm backup instead
+            tracker.x -= 100.0 * math.cos(tracker.heading)
+            tracker.y -= 100.0 * math.sin(tracker.heading)
+            print(f"[{step:4d}] a={action_idx} {pilot_cmd_str:<12} BUMPED — backed off 10 cm")
+        else:
+            tracker.apply_action(action_idx)
+            dist = tracker.distance_to_door
+            print(
+                f"[{step:4d}] a={action_idx} {pilot_cmd_str:<12} {description:<14} "
+                f"dist={dist:.0f}mm  pos=({tracker.x:.0f},{tracker.y:.0f})  {resp}"
+            )
+            if dist < escape_dist_mm:
+                print(f"Reached Door 13! (dist={dist:.0f}mm < {escape_dist_mm:.0f}mm threshold)")
+                break
     else:
         print(f"Reached max steps ({max_steps}) without escaping.")
 

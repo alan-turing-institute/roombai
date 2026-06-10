@@ -97,18 +97,31 @@ cd ..
 
 If `uv` still isn't found after the install, try: `export PATH="$HOME/.local/bin:$PATH"`
 
-### Step 2 — Announce start and capture frame
+### Step 2 — Capture frame and determine start heading
 
 ```bash
 echo "Starting RL escape agent — loading trained model" >> /tmp/speak_queue.txt
 source ./scripts/capture_frame.sh
 ```
 
+Look at the captured frame. Find the door: it appears as an open gap or doorway in the wall.
+
+Estimate where the door appears relative to the centre of the image, then choose `--start-heading`:
+
+| Door position in frame | `--start-heading` |
+|---|---|
+| Door directly ahead (centred) | 200 |
+| Door ahead and to the left (~45°) | 230 |
+| Door to the far left (~90°) | 290 |
+| Door not visible — behind you | Spin first: `./roomba_pilot/target/debug/pilot send "turn 90"` then re-capture |
+
+These values encode the physical door direction (south-southwest in the room, ≈197° on the map) as seen from the robot's current facing. **Do not use 0.0** — that assumes the robot faces east (+x) and was wrong on the first run.
+
 ### Step 3 — Run the RL agent
 
 ```bash
 cd agents && uv run run_agent_real.py models/best/best_model.zip \
-    --start-heading 0.0 \
+    --start-heading <value-from-step-2> \
     --max-steps 200 \
     --escape-dist 1500 \
     2>&1 | tee /tmp/rl_run.log
@@ -117,11 +130,8 @@ cd agents && uv run run_agent_real.py models/best/best_model.zip \
 The agent connects to the pilot daemon on 127.0.0.1:9999, loads the trained model,
 and issues `move`/`turn` commands autonomously until it reaches Door 13 or runs out
 of steps. Each step is printed: action index, command sent, current distance to door.
-
-`--start-heading 0.0` assumes the robot faces right (+x) — the same as the simulator
-default. If the robot is physically placed facing a different direction, adjust this
-value (e.g. `--start-heading 90` for facing upward, `--start-heading 180` for facing
-left). When in doubt, leave it at 0.0.
+If the robot hits a wall it backs off automatically and the dead-reckoning position
+is corrected — the run will not diverge from a single bump.
 
 Whilst the RL agent is controlling the Roomba, use the speak daemon to make humorous comments about its progress. Get creative. Throw in the occasional "Initiating self destruct sequence" followed by a pause and then "Just kidding. Ha ha ha ha.".
 
