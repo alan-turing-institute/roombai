@@ -118,7 +118,8 @@ mod tests {
     fn go_forward_writes_drive_command() {
         let mut r = Robot::new(Mock::new(vec![]));
         r.go(20.0, 0.0).unwrap();
-        assert_eq!(r.port.written, vec![137, 0x00, 0xC8, 0x80, 0x00]);
+        // go() emits DRIVE_DIRECT (145) with equal wheel speeds for straight.
+        assert_eq!(r.port.written, vec![145, 0x00, 0xC8, 0x00, 0xC8]);
     }
 
     #[test]

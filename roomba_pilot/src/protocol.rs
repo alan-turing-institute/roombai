@@ -113,20 +113,33 @@ pub fn seek_dock() -> Vec<u8> {
     vec![FORCE_SEEKING_DOCK]
 }
 
-/// Convert a high-level `go(cm/s, deg/s)` request into a DRIVE command,
-/// mirroring create.py's `go`. Only pure-translation or pure-rotation are
-/// supported here (matching how the daemon uses it).
+/// Convert a high-level `go(cm/s, deg/s)` request into a DRIVE_DIRECT command.
+///
+/// This used to emit the radius-based DRIVE (opcode 137) command, but on this
+/// robot that command is not reliably honored — straight `go`/`forward` legs
+/// and in-place `turn`/`spin` rotations barely moved the wheels (motor current
+/// stayed at idle), so the robot "thought" it was rotating/driving while
+/// sitting still. DRIVE_DIRECT (opcode 145, independent wheel velocities) drives
+/// the motors reliably, so we synthesize both translation and in-place rotation
+/// from per-wheel speeds. Only pure-translation or pure-rotation are supported
+/// (matching how the daemon uses it).
 pub fn go(cm_per_sec: f64, deg_per_sec: f64) -> Vec<u8> {
     if cm_per_sec == 0.0 {
-        // pure rotation in place
+        // pure rotation in place: wheels spin in opposite directions at the
+        // speed that yields `deg_per_sec` given the wheelbase.
         let rad_per_sec = deg_per_sec.to_radians();
-        let vel_mm = (rad_per_sec.abs() * (WHEEL_SPAN_MM / 2.0)) as i16; // trunc toward zero, like int()
-        let radius = if rad_per_sec >= 0.0 { RADIUS_CCW } else { RADIUS_CW };
-        drive(vel_mm, radius)
+        let wheel_mm = (rad_per_sec.abs() * (WHEEL_SPAN_MM / 2.0)) as i16; // trunc toward zero, like int()
+        if rad_per_sec >= 0.0 {
+            // CCW (+deg): right wheel forward, left wheel backward.
+            drive_direct(wheel_mm, -wheel_mm)
+        } else {
+            // CW (-deg): right wheel backward, left wheel forward.
+            drive_direct(-wheel_mm, wheel_mm)
+        }
     } else {
-        // pure translation (deg_per_sec assumed 0)
+        // pure translation (deg_per_sec assumed 0): both wheels equal.
         let vel_mm = (10.0 * cm_per_sec) as i16;
-        drive(vel_mm, RADIUS_STRAIGHT)
+        drive_direct(vel_mm, vel_mm)
     }
 }
 
@@ -215,16 +228,18 @@ mod tests {
 
     #[test]
     fn go_forward_translates_cm_to_mm_straight() {
-        // 20 cm/s -> 200 mm/s straight
-        assert_eq!(go(20.0, 0.0), vec![137, 0x00, 0xC8, 0x80, 0x00]);
+        // 20 cm/s -> 200 mm/s on both wheels (DRIVE_DIRECT: right, then left).
+        // 200 -> 0x00C8
+        assert_eq!(go(20.0, 0.0), vec![145, 0x00, 0xC8, 0x00, 0xC8]);
     }
 
     #[test]
     fn go_spin_in_place() {
-        // go(0, 90): vel = radians(90)*117.5 = 184.6 -> 184 mm/s, CCW radius=1
-        // 184 -> 0x00B8
-        assert_eq!(go(0.0, 90.0), vec![137, 0x00, 0xB8, 0x00, 0x01]);
-        // negative deg spins CW
-        assert_eq!(go(0.0, -90.0), vec![137, 0x00, 0xB8, 0xFF, 0xFF]);
+        // go(0, 90): wheel = radians(90)*117.5 = 184.6 -> 184 mm/s.
+        // 184 -> 0x00B8, -184 -> 0xFF48. DRIVE_DIRECT wire order is right, left.
+        // CCW: right forward (+184), left backward (-184).
+        assert_eq!(go(0.0, 90.0), vec![145, 0x00, 0xB8, 0xFF, 0x48]);
+        // CW: right backward (-184), left forward (+184).
+        assert_eq!(go(0.0, -90.0), vec![145, 0xFF, 0x48, 0x00, 0xB8]);
     }
 }
