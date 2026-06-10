@@ -41,7 +41,7 @@ CHAIR_BBOX_EXPAND = 0.12    # expand detected chair x-extent by this fraction of
 LEG_FLOOR_FRAC    = 0.45    # analyse bottom LEG_FLOOR_FRAC of frame for legs
 LEG_MIN_LENGTH    = 0.25    # min leg segment as fraction of floor-region height
 LEG_MAX_SLOPE     = 0.15    # max |dx/dy| to count as near-vertical
-LEG_MIN_CLUSTER   = 2       # min Hough segments per cluster to count as a real leg
+LEG_MIN_CLUSTER   = 3       # min Hough segments per cluster to count as a real leg
 CHAIR_PAIR_MAX_CM = 80.0    # real-world gap below which two legs are treated as the same
                              # chair; the invisible floor bar means the gap is also blocked
 LEG_MAX_DIST_CM   = 200.0   # don't block navigation for legs further than this
@@ -1103,10 +1103,10 @@ def detect_thin_legs(
         fp_dist = floor_plane_depth(y_bot, y_horizon) if y_horizon > 0 else None
         leg_dist = fp_dist if fp_dist is not None else scene_depth_cm
 
-        # Skip navigation blocking for distant legs — they're not an
-        # immediate hazard and distant vertical structures (walls, door
-        # frames) produce many false positives.
-        if leg_dist and leg_dist > LEG_MAX_DIST_CM:
+        # Require a distance estimate — without one we can't distinguish a
+        # real close leg from a distant wall edge or floor texture artefact.
+        # Also skip legs confirmed to be beyond the hazard threshold.
+        if leg_dist is None or leg_dist > LEG_MAX_DIST_CM:
             continue
 
         # Estimate real-world clearance: use ROBOT_WIDTH_CM at leg distance.
@@ -1159,8 +1159,8 @@ def detect_thin_legs(
             gap_cm = gap_px * dist / FOCAL_PX
             if gap_cm > CHAIR_PAIR_MAX_CM:
                 continue   # too far apart — different chairs or not a chair
-            if dist > LEG_MAX_DIST_CM:
-                continue   # chair pair too far to be an immediate hazard
+            if dist is None or dist > LEG_MAX_DIST_CM:
+                continue   # unknown distance or too far — skip
 
             # Block every frame-third that overlaps the region [x_left, x_right]
             x_left  = min(cx_a, cx_b)
