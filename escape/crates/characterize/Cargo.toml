@@ -1,0 +1,10 @@
+[package]
+name = "characterize"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+roomba_pilot = { path = "../../../roomba_pilot" }
+serialport = "4.7"
+serde_json = "1"
+ctrlc = "3"
