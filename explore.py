@@ -99,6 +99,12 @@ _state: dict = {
 odom         = OdometryTracker()
 map_recorder = MapRecorder()
 
+# Set while vision is idle, cleared while a frame is being analysed.
+# Mover thread waits on this before each movement burst so the robot
+# never moves without up-to-date scene information.
+_vision_idle = threading.Event()
+_vision_idle.set()  # no analysis in progress at startup
+
 
 # ── Vision child-process worker ───────────────────────────────────────────────
 # Must be a module-level function (not nested) so multiprocessing can pickle it.
@@ -313,6 +319,7 @@ def send_cmd(cmd: str, timeout: float = 5.0) -> str:
 # ── Camera ───────────────────────────────────────────────────────────────────
 FRAME_DIR.mkdir(parents=True, exist_ok=True)
 _CURRENT_FRAME = Path("/tmp/roomba_current.jpg")
+_TMP_FRAME     = Path("/tmp/roomba_current.tmp.jpg")
 
 
 def capture_frame(path: Path) -> bool:
@@ -324,7 +331,19 @@ def capture_frame(path: Path) -> bool:
              "-o", str(path), "-t", "500"],
             capture_output=True, timeout=5,
         )
-        return r.returncode == 0
+        if r.returncode != 0:
+            return False
+        # rpicam-still can return 0 before the ISP pipeline finishes flushing
+        # the file.  A valid 640×480 JPEG is always several kilobytes; anything
+        # smaller means the write was not complete.
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+        if size < 2048:
+            log(f"[CAM] ignoring truncated capture ({size} B) at {path.name}")
+            return False
+        return True
     except Exception as e:
         log(f"capture error: {e}")
         return False
@@ -364,8 +383,11 @@ def camera_thread():
         if not capture_frame(path):
             continue
 
+        # Write to a temp file then rename atomically so that rsync / the Read
+        # tool never sees a half-written JPEG when they sample _CURRENT_FRAME.
         try:
-            shutil.copy(str(path), str(_CURRENT_FRAME))
+            shutil.copy(str(path), str(_TMP_FRAME))
+            _TMP_FRAME.replace(_CURRENT_FRAME)
         except Exception:
             pass
 
@@ -396,7 +418,12 @@ def camera_thread():
             )
 
         # ── Vision inference in child process (3 s timeout; kill on hang) ──
-        scene = _vision.analyze(curr_img, prev_img, baseline_cm)
+        # Clear the event so the mover pauses until analysis is done.
+        _vision_idle.clear()
+        try:
+            scene = _vision.analyze(curr_img, prev_img, baseline_cm)
+        finally:
+            _vision_idle.set()
         if scene is None:
             prev_img  = curr_img    # keep prev_img current for next frame's flow
             prev_odom = curr_odom
@@ -697,6 +724,12 @@ def mover_thread():
     log("[MOVER] starting pos=(0,0) heading=0°")
 
     while True:
+        # Block until the camera thread has finished analysing the latest frame.
+        # This ensures every movement decision is based on fresh scene data.
+        if not _vision_idle.is_set():
+            log("[MOVER] pausing — waiting for vision analysis to complete")
+            _vision_idle.wait(timeout=10.0)
+
         _read_strategy()
         mode = state_get("mode")
 
