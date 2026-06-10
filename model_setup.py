@@ -62,6 +62,66 @@ _FAST_DEPTH_ONNX_URL = (
 )
 _FAST_DEPTH_ONNX_PATH = Path.home() / ".cache" / "fast_depth" / "fastdepth.onnx"
 
+# door_yolo: YOLOv8s fine-tuned for door detection (single class: "door").
+# Source: github.com/sayedmohamedscu/YOLOv8-Door-detection-for-visually-impaired-people
+# Trained on NYC indoor/outdoor doors; ~22 MB .pt → ONNX exported on first run.
+# Runs on Pi CPU via onnxruntime alongside fast_depth.
+_DOOR_YOLO_PT_URL   = (
+    "https://raw.githubusercontent.com/sayedmohamedscu/"
+    "YOLOv8-Door-detection-for-visually-impaired-people/main/doors.pt"
+)
+_DOOR_YOLO_CACHE    = Path.home() / ".cache" / "door_yolo"
+_DOOR_YOLO_PT_PATH  = _DOOR_YOLO_CACHE / "doors.pt"
+_DOOR_YOLO_ONNX_PATH = _DOOR_YOLO_CACHE / "doors.onnx"
+
+
+# ── door_yolo: download .pt + export to ONNX ─────────────────────────────────
+def _ensure_door_yolo_onnx() -> bool:
+    """
+    Download doors.pt from GitHub then export to ONNX via ultralytics.
+    The export only runs once; subsequent calls return immediately.
+    Returns True if doors.onnx is ready.
+    """
+    if _DOOR_YOLO_ONNX_PATH.exists() and _DOOR_YOLO_ONNX_PATH.stat().st_size > 10_000:
+        _log("door_yolo: ONNX already present")
+        return True
+
+    _DOOR_YOLO_CACHE.mkdir(parents=True, exist_ok=True)
+
+    # ── Step 1: download .pt if needed ───────────────────────────────────────
+    if not (_DOOR_YOLO_PT_PATH.exists() and _DOOR_YOLO_PT_PATH.stat().st_size > 10_000_000):
+        _log("door_yolo: downloading doors.pt from GitHub (~22 MB)…")
+        _speak("Downloading door detection model weights.")
+        try:
+            import urllib.request
+            urllib.request.urlretrieve(_DOOR_YOLO_PT_URL, str(_DOOR_YOLO_PT_PATH))
+            size_mb = _DOOR_YOLO_PT_PATH.stat().st_size / 1e6
+            _log(f"door_yolo: doors.pt saved ({size_mb:.1f} MB)")
+        except Exception as e:
+            _log(f"door_yolo: download failed — {e}")
+            return False
+
+    # ── Step 2: export .pt → ONNX via ultralytics ────────────────────────────
+    _log("door_yolo: exporting doors.pt → doors.onnx (may take 30–90 s on Pi)…")
+    _speak("Exporting door model to ONNX format.")
+    try:
+        from ultralytics import YOLO
+        model = YOLO(str(_DOOR_YOLO_PT_PATH))
+        # export() saves <name>.onnx next to the .pt file and returns its path
+        exported = Path(str(model.export(format="onnx", imgsz=640, opset=12, simplify=False)))
+        if not exported.exists():
+            _log(f"door_yolo: export returned {exported} but file not found")
+            return False
+        if exported.resolve() != _DOOR_YOLO_ONNX_PATH.resolve():
+            exported.rename(_DOOR_YOLO_ONNX_PATH)
+        size_mb = _DOOR_YOLO_ONNX_PATH.stat().st_size / 1e6
+        _log(f"door_yolo: ONNX ready ({size_mb:.1f} MB) → {_DOOR_YOLO_ONNX_PATH}")
+        return True
+    except Exception as e:
+        _log(f"door_yolo: ONNX export failed — {e}")
+        return False
+
+
 # ── fast_depth ONNX download ──────────────────────────────────────────────────
 def _ensure_fast_depth_onnx() -> bool:
     """
@@ -338,6 +398,14 @@ def ensure_models(abort_if_required_missing: bool = True) -> dict[str, bool]:
         _log(f"fast_depth: READY  {_FAST_DEPTH_ONNX_PATH}")
     else:
         _log("fast_depth: MISSING — depth will fall back to optical flow only")
+
+    # ── door_yolo ONNX (CPU / onnxruntime, door panel detector) ──────────────
+    _log("--- door_yolo (ONNX/CPU) ---")
+    readiness["door_yolo"] = _ensure_door_yolo_onnx()
+    if readiness["door_yolo"]:
+        _log(f"door_yolo: READY  {_DOOR_YOLO_ONNX_PATH}")
+    else:
+        _log("door_yolo: MISSING — door detection will rely on OpenCV geometry only")
 
     ready   = [k for k, v in readiness.items() if v]
     missing = [k for k, v in readiness.items() if not v]

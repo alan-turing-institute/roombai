@@ -488,6 +488,13 @@ def camera_thread():
                                          det.get("distance_cm"))
 
         # ── Door detection (fused) ────────────────────────────────────────
+        yolo_doors = scene.get("yolo_doors", [])
+        if yolo_doors:
+            log(
+                f"[DOOR-YOLO] frame {frame_num}: {len(yolo_doors)} panel(s) — "
+                + ", ".join(f"{d['position']}@{d['confidence']:.2f}" for d in yolo_doors)
+            )
+
         door = scene["door"]
         state_set(last_door=door)
 

@@ -22,6 +22,13 @@ _FAST_DEPTH_ONNX = Path.home() / ".cache" / "fast_depth" / "fastdepth.onnx"
 _fast_depth_session = None
 _fast_depth_input_name: str = "input.1"   # queried at load time
 
+# ── door_yolo ONNX path (CPU inference via onnxruntime) ──────────────────────
+# YOLOv8s fine-tuned for door detection, single class "door".
+# Input: 640×640 normalised RGB; output: [1, 5, 8400] (cx,cy,w,h,score).
+_DOOR_YOLO_ONNX  = Path.home() / ".cache" / "door_yolo" / "doors.onnx"
+_door_yolo_session = None
+_DOOR_YOLO_SIZE  = 640
+
 # ── Camera intrinsics ─────────────────────────────────────────────────────────
 # Pi Camera v2/v3, 640×480, horizontal FOV ≈ 66°
 FOCAL_PX          = 492.0
@@ -73,7 +80,7 @@ KNOWN_HEIGHTS_CM: dict[str, float] = {
 _hailo_lock = threading.Lock()
 _hailo_vdev = None                       # one VDevice shared across all models
 _hailo_reg: dict[str, dict] = {}        # name → loaded model state
-MODELS_AVAILABLE: dict[str, bool] = {k: False for k in MODEL_SPECS} | {"fast_depth": False}
+MODELS_AVAILABLE: dict[str, bool] = {k: False for k in MODEL_SPECS} | {"fast_depth": False, "door_yolo": False}
 
 
 def _get_vdevice():
@@ -136,12 +143,13 @@ def _load_model(name: str) -> bool:
 
 
 def init_all_models() -> dict[str, bool]:
-    """Load every model in MODEL_SPECS plus fast_depth ONNX. Call once at startup."""
+    """Load every model in MODEL_SPECS plus fast_depth and door_yolo ONNX. Call once at startup."""
     with _hailo_lock:
         for name in MODEL_SPECS:
             if not MODELS_AVAILABLE[name]:
                 _load_model(name)
         _init_fast_depth()
+        _init_door_yolo()
     return dict(MODELS_AVAILABLE)
 
 
@@ -186,6 +194,148 @@ def _infer_fast_depth(img_bgr: np.ndarray) -> np.ndarray | None:
     except Exception as e:
         print(f"[vision] fast_depth infer error: {e}")
         return None
+
+
+# ── door_yolo ONNX (door panel detector) ─────────────────────────────────────
+
+def _init_door_yolo() -> bool:
+    """Load the door_yolo ONNX session. Returns True on success."""
+    global _door_yolo_session
+    if not _DOOR_YOLO_ONNX.exists():
+        print(f"[vision] door_yolo: ONNX not found at {_DOOR_YOLO_ONNX} — run ensure_models() first")
+        return False
+    try:
+        import onnxruntime as ort
+        sess = ort.InferenceSession(str(_DOOR_YOLO_ONNX), providers=["CPUExecutionProvider"])
+        _door_yolo_session = sess
+        MODELS_AVAILABLE["door_yolo"] = True
+        print(f"[vision] door_yolo: loaded (ONNX/CPU, input={_DOOR_YOLO_SIZE}×{_DOOR_YOLO_SIZE})")
+        return True
+    except Exception as e:
+        print(f"[vision] door_yolo: init failed — {e}")
+        return False
+
+
+def _infer_door_yolo(img_bgr: np.ndarray, conf_thresh: float = 0.30) -> list[dict]:
+    """
+    Run the door_yolo ONNX model on CPU.
+
+    Returns a list of door-panel detections, each:
+      {"bbox_px": (x1,y1,x2,y2), "confidence": float, "position": "left"|"center"|"right"}
+
+    YOLOv8 ONNX output shape: [1, 5, 8400]  (cx, cy, w, h, score) for single class.
+    Coords may be in model pixel space [0, 640] or normalised [0, 1] depending on
+    the export version — both are handled.
+    """
+    if _door_yolo_session is None:
+        return []
+
+    orig_h, orig_w = img_bgr.shape[:2]
+    sz = _DOOR_YOLO_SIZE
+
+    # Preprocess: BGR → RGB, resize, normalise, NCHW float32
+    rgb     = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    resized = cv2.resize(rgb, (sz, sz))
+    inp     = np.transpose(resized.astype(np.float32) / 255.0, (2, 0, 1))[np.newaxis]
+
+    try:
+        input_name = _door_yolo_session.get_inputs()[0].name
+        raw_out    = _door_yolo_session.run(None, {input_name: inp})
+    except Exception as e:
+        print(f"[vision] door_yolo infer error: {e}")
+        return []
+
+    # raw_out[0]: [1, 5, 8400] → squeeze → [5, 8400] → transpose → [8400, 5]
+    preds = raw_out[0][0].T      # [8400, 5]: cx, cy, w, h, score
+
+    mask  = preds[:, 4] >= conf_thresh
+    preds = preds[mask]
+    if len(preds) == 0:
+        return []
+
+    cx, cy, w, h = preds[:, 0], preds[:, 1], preds[:, 2], preds[:, 3]
+
+    # Normalise coords to model pixel space if they came out as fractions
+    if cx.max() <= 1.01:
+        cx, cy, w, h = cx * sz, cy * sz, w * sz, h * sz
+
+    x1 = np.clip(cx - w / 2, 0, sz).astype(int)
+    y1 = np.clip(cy - h / 2, 0, sz).astype(int)
+    x2 = np.clip(cx + w / 2, 0, sz).astype(int)
+    y2 = np.clip(cy + h / 2, 0, sz).astype(int)
+
+    # NMS in model-pixel space
+    boxes_xywh = np.stack([x1, y1, x2 - x1, y2 - y1], axis=1).tolist()
+    scores     = preds[:, 4].tolist()
+    indices    = cv2.dnn.NMSBoxes(boxes_xywh, scores, conf_thresh, nms_threshold=0.45)
+    if len(indices) == 0:
+        return []
+    indices = indices.flatten() if hasattr(indices, "flatten") else list(indices)
+
+    # Scale bboxes back to original image size
+    sx, sy = orig_w / sz, orig_h / sz
+    detections: list[dict] = []
+    for i in indices:
+        px1, py1 = int(x1[i] * sx), int(y1[i] * sy)
+        px2, py2 = int(x2[i] * sx), int(y2[i] * sy)
+        cx_orig  = (px1 + px2) / 2.0
+        pos      = ("left"   if cx_orig < orig_w / 3
+                    else "right" if cx_orig > 2 * orig_w / 3
+                    else "center")
+        detections.append({
+            "bbox_px":    (px1, py1, px2, py2),
+            "confidence": round(float(preds[i, 4]), 3),
+            "position":   pos,
+        })
+
+    return detections
+
+
+def _fuse_door_detections(cv_door: dict, yolo_doors: list[dict], orig_w: int) -> dict:
+    """
+    Fuse OpenCV geometric door detection with YOLO door-panel detections.
+
+    Roles:
+      door_yolo  detects the *wooden door panel* (solid surface; works when
+                 the door is closed or only partially open).
+      OpenCV     detects the *gap / frame* in the glass wall (works best when
+                 the door is open and the opening is the bright region).
+
+    Decision table:
+      Both agree  → boost confidence; keep OpenCV's open/position assessment
+                    (it has better spatial precision for navigation).
+      YOLO only   → door panel visible but no navigable gap yet; mark closed.
+      OpenCV only → gap detected, panel swung out of frame; door is open.
+      Neither     → no door.
+    """
+    if not cv_door["door_visible"] and not yolo_doors:
+        return cv_door
+
+    if yolo_doors and not cv_door["door_visible"]:
+        best = max(yolo_doors, key=lambda d: d["confidence"])
+        return {
+            **cv_door,
+            "door_visible":  True,
+            "door_open":     False,
+            "door_position": best["position"],
+            "confidence":    round(best["confidence"] * 0.7, 3),
+            "notes": (
+                f"YOLO door panel at {best['position']} "
+                f"(conf={best['confidence']:.2f}); no geometric gap yet"
+            ),
+        }
+
+    if cv_door["door_visible"] and yolo_doors:
+        best     = max(yolo_doors, key=lambda d: d["confidence"])
+        boosted  = round(min(1.0, cv_door["confidence"] + best["confidence"] * 0.25), 3)
+        return {
+            **cv_door,
+            "confidence": boosted,
+            "notes": cv_door["notes"] + f" | YOLO panel {best['position']} ({best['confidence']:.2f})",
+        }
+
+    # OpenCV only (door fully open, panel swung clear of frame) — return as-is
+    return cv_door
 
 
 # ── Raw Hailo inference ───────────────────────────────────────────────────────
@@ -712,13 +862,16 @@ def analyze_scene(
         else {"left": 0.0, "center": 0.0, "right": 0.0}
     )
 
-    # 6. Door detection — fuses geometry and depth
-    door = detect_door_cv(img_bgr, scene_depth_cm=scene_depth_cm, depth_map=depth_map)
+    # 6. Door detection — OpenCV geometry + YOLO panel, fused
+    cv_door    = detect_door_cv(img_bgr, scene_depth_cm=scene_depth_cm, depth_map=depth_map)
+    yolo_doors = _infer_door_yolo(img_bgr)
+    door       = _fuse_door_detections(cv_door, yolo_doors, orig_w)
 
     return {
         "detections":     detections,
         "depth_map":      depth_map,
         "door":           door,
+        "yolo_doors":     yolo_doors,
         "obstacles":      obstacles,
         "open_space":     open_space,
         "scene_depth_cm": scene_depth_cm,
