@@ -142,4 +142,5 @@ echo ""
 cd "$REPO_DIR"
 # explore.py runs model check again internally — any models that loaded above
 # will already be in MODEL_SPECS so init_all_models() is effectively instant.
-exec python3 explore.py $GREET_FLAG
+# 10-minute hard time limit: timeout sends SIGTERM, then SIGKILL after 5 s.
+exec timeout --kill-after=5 600 python3 explore.py $GREET_FLAG
