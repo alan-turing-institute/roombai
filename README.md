@@ -1,4 +1,4 @@
-# RoombaI — Escape Room Competition
+# RoombAI — Escape Room Competition
 
 A competition where each participant programs a Claude AI agent to control a Roomba robot and escape a room through an open door as fast as possible. The robot has a camera mounted on it and Claude controls it by issuing pilot commands.
 
