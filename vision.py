@@ -42,6 +42,8 @@ LEG_FLOOR_FRAC    = 0.45    # analyse bottom LEG_FLOOR_FRAC of frame for legs
 LEG_MIN_LENGTH    = 0.25    # min leg segment as fraction of floor-region height
 LEG_MAX_SLOPE     = 0.15    # max |dx/dy| to count as near-vertical
 LEG_MIN_CLUSTER   = 2       # min Hough segments per cluster to count as a real leg
+CHAIR_PAIR_MAX_CM = 80.0    # real-world gap below which two legs are treated as the same
+                             # chair; the invisible floor bar means the gap is also blocked
 STUCK_BASELINE_CM = 20.0
 STUCK_FLOW_PX     = 3.0
 
@@ -1091,6 +1093,44 @@ def detect_thin_legs(
                 blocked["left"] = True
             if not right_clear:
                 blocked["right"] = True
+
+    # ── Chair pair analysis ───────────────────────────────────────────────────
+    # Chairs often have an invisible horizontal bar at floor level between their
+    # legs.  For every pair of validated clusters, compute the real-world gap; if
+    # it is less than CHAIR_PAIR_MAX_CM they are likely the same chair and the
+    # entire corridor between (and including) the legs is blocked.
+    valid_clusters = [
+        (float(np.mean([s[0] for s in cl])),           # cx
+         float(max(s[1] for s in cl)))                  # y_bot (lowest pixel)
+        for cl in clusters if len(cl) >= LEG_MIN_CLUSTER
+    ]
+    third = w / 3
+    for i, (cx_a, y_bot_a) in enumerate(valid_clusters):
+        for cx_b, y_bot_b in valid_clusters[i + 1:]:
+            # Use the nearer leg's y_bot for a more accurate distance estimate
+            y_near = max(y_bot_a, y_bot_b)   # larger y = closer to camera
+            dist = (floor_plane_depth(y_near, y_horizon) if y_horizon > 0
+                    else scene_depth_cm)
+            if not dist or dist <= 0:
+                continue
+            gap_px = abs(cx_b - cx_a)
+            gap_cm = gap_px * dist / FOCAL_PX
+            if gap_cm > CHAIR_PAIR_MAX_CM:
+                continue   # too far apart — different chairs or not a chair
+
+            # Block every frame-third that overlaps the region [x_left, x_right]
+            x_left  = min(cx_a, cx_b)
+            x_right = max(cx_a, cx_b)
+            for side, (lo, hi) in [("left",   (0,       third)),
+                                    ("center", (third,   2 * third)),
+                                    ("right",  (2 * third, w))]:
+                if x_left < hi and x_right > lo:
+                    blocked[side] = True
+            print(
+                f"[vision] chair pair: x=[{x_left/w:.2f},{x_right/w:.2f}] "
+                f"gap≈{gap_cm:.0f}cm @ {dist:.0f}cm — gap blocked",
+                flush=True,
+            )
 
     return {"blocked": blocked, "legs": leg_xs}
 
