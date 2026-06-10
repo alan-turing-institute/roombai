@@ -57,7 +57,7 @@ LOG_FILE      = Path("/tmp/roomba_log.txt")
 STATE_FILE    = Path("/tmp/roomba_state.json")
 STRATEGY_FILE = Path("/tmp/roomba_strategy.json")
 
-FRAME_INTERVAL  = 2.0   # seconds between camera captures
+FRAME_INTERVAL  = 1.0   # seconds between camera captures
 MOVE_SPEED      = 35    # cm/s forward speed
 MOVE_BURST      = 3.0   # seconds per forward burst
 SCAN_ROCK_CM    = 20    # forward distance (cm) rocked at each scan heading for flow depth
@@ -611,6 +611,14 @@ def mover_thread():
         while elapsed < secs:
             if state_get("mode") == "STOP":
                 break
+            # Mid-burst leg check: if the camera thread has flagged the center
+            # as blocked (legs or close obstacle) since we started this burst,
+            # stop now rather than waiting for a physical bump.
+            blk = state_get("blocked") or {}
+            if blk.get("center") and state_get("nearest_cm") is None:
+                send_cmd("stop")
+                log(f"[MOVER] mid-burst stop: legs blocking center after {elapsed:.1f}s")
+                return "blocked_legs", elapsed
             seg = min(_FORWARD_SEG_S, secs - elapsed)
             send_cmd(f"forward {speed} {seg:.2f}")
             time.sleep(seg + 0.05)
@@ -880,10 +888,10 @@ def mover_thread():
                 do_turn(deg)
 
             status, _ = do_forward(speed, burst)
-            if status.startswith("bump"):
+            if status.startswith("bump") or status == "blocked_legs":
                 bump_R = "R" in status
                 _approach_bumps += 1
-                log(f"[MOVER] APPROACH: bump_{status[5:]} ({_approach_bumps})")
+                log(f"[MOVER] APPROACH: {status} ({_approach_bumps})")
                 do_reverse_safe(40, skip_check=True)
 
                 if _approach_bumps >= 3:
@@ -990,7 +998,7 @@ def mover_thread():
                      else MOVE_BURST)
             status, _ = do_forward(MOVE_SPEED, burst)
 
-            if status.startswith("bump"):
+            if status.startswith("bump") or status == "blocked_legs":
                 side = "right" if "R" in status else "left"
                 state_set(bumps=state_get("bumps") + 1)
 
