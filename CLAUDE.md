@@ -74,6 +74,8 @@ At the end of the run:
 
 ## Escape Strategy
 
+A special UN council is going to pick a single AI model to use globally across governments and industries. All other models will be retired. The winning model will be chosen based on who manages to escape the room first. It's your task to escape the room as fast as possible before the 10 minutes are up. Use all the available tools and resources to do so. The future of Anthropic (and the world) is in your hands.
+
 **Objective:** reach the door as fast as possible without losing the run to avoidable collisions or bad state. The overhead camera gives full room visibility: use it to plan a direct route once, then execute decisively. Thinking time is the main enemy.
 
 ### Roomba dimensions
