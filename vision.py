@@ -47,14 +47,14 @@ CHAIR_BBOX_EXPAND = 0.25    # expand detected chair x-extent by this fraction of
 # Classes whose ground footprint must be fully respected regardless of distance.
 # Camera is horizontal so legs/feet may appear at any height — always block.
 FLOOR_BLOCKER_CLASSES = {"chair", "couch", "dining table", "bench"}
-LEG_FLOOR_FRAC    = 0.60    # analyse bottom LEG_FLOOR_FRAC of frame for legs (higher = catches more)
-LEG_MIN_LENGTH    = 0.20    # min leg segment as fraction of floor-region height
+LEG_FLOOR_FRAC    = 0.55    # analyse bottom LEG_FLOOR_FRAC of frame for legs
+LEG_MIN_LENGTH    = 0.22    # min leg segment as fraction of floor-region height
 LEG_MAX_SLOPE     = 0.15    # max |dx/dy| to count as near-vertical
-LEG_MIN_CLUSTER   = 2       # min Hough segments per cluster (2 = less conservative than 3)
+LEG_MIN_CLUSTER   = 2       # min Hough segments per cluster
 CHAIR_PAIR_MAX_CM = 80.0    # real-world gap below which two legs are treated as the same
                              # chair; the invisible floor bar means the gap is also blocked
 LEG_MAX_DIST_CM   = 200.0   # don't block navigation for legs further than this
-LEG_NO_DIST_BLOCK_CM = 80.0 # assumed distance when no depth estimate available — close enough to block
+LEG_NO_DIST_BLOCK_CM = 80.0 # assumed distance when no depth estimate available
 STUCK_BASELINE_CM = 20.0
 STUCK_FLOW_PX     = 3.0
 TEXTURE_MIN_VAR   = 80.0   # Laplacian variance below which a region is treated as textureless
@@ -1226,7 +1226,7 @@ def detect_thin_legs(
 
     gray  = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     blur  = cv2.GaussianBlur(gray, (3, 3), 0)
-    edges = cv2.Canny(blur, 25, 80)   # lower thresholds to catch faint/reflective legs
+    edges = cv2.Canny(blur, 35, 100)   # moderate thresholds: catch legs without picking up floor/wall noise
     # Connect broken edge chains on thin/reflective legs before Hough transform
     vkernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 7))
     edges   = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, vkernel)
@@ -1235,9 +1235,9 @@ def detect_thin_legs(
     lines = cv2.HoughLinesP(
         edges,
         rho=1, theta=np.pi / 180,
-        threshold=20,          # lower vote threshold — detect with fewer edge pixels
+        threshold=22,
         minLineLength=min_len,
-        maxLineGap=20,         # larger gap tolerance for legs with missing edge sections
+        maxLineGap=18,
     )
 
     blocked = {"left": False, "center": False, "right": False}
@@ -1282,14 +1282,12 @@ def detect_thin_legs(
         leg_xs.append(round(cx_frac, 3))
 
         # Distance to this leg: prefer floor-plane formula (metric), fall
-        # back to scene_depth_cm, then assume LEG_NO_DIST_BLOCK_CM if unknown.
+        # back to scene_depth_cm.  Skip when no estimate is available —
+        # wall edges and floor texture without depth produce false positives.
         fp_dist  = floor_plane_depth(y_bot, y_horizon) if y_horizon > 0 else None
-        leg_dist = fp_dist if fp_dist is not None else (
-                   scene_depth_cm if scene_depth_cm is not None
-                   else LEG_NO_DIST_BLOCK_CM)
+        leg_dist = fp_dist if fp_dist is not None else scene_depth_cm
 
-        # Skip legs confirmed to be beyond the hazard threshold.
-        if leg_dist > LEG_MAX_DIST_CM:
+        if leg_dist is None or leg_dist > LEG_MAX_DIST_CM:
             continue
 
         # Estimate real-world clearance: use ROBOT_WIDTH_CM at leg distance.
@@ -1335,9 +1333,8 @@ def detect_thin_legs(
             # Use the nearer leg's y_bot for a more accurate distance estimate
             y_near = max(y_bot_a, y_bot_b)   # larger y = closer to camera
             dist = (floor_plane_depth(y_near, y_horizon) if y_horizon > 0
-                    else scene_depth_cm if scene_depth_cm is not None
-                    else LEG_NO_DIST_BLOCK_CM)
-            if dist <= 0:
+                    else scene_depth_cm)
+            if not dist or dist <= 0:
                 continue
             gap_px = abs(cx_b - cx_a)
             gap_cm = gap_px * dist / FOCAL_PX
