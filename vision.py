@@ -39,8 +39,9 @@ OBSTACLE_BLOCK_DIST_CM = 200.0
 # Chair leg detection (thin near-vertical structures in the floor region)
 CHAIR_BBOX_EXPAND = 0.12    # expand detected chair x-extent by this fraction of frame width on each side
 LEG_FLOOR_FRAC    = 0.45    # analyse bottom LEG_FLOOR_FRAC of frame for legs
-LEG_MIN_LENGTH    = 0.12    # min leg segment as fraction of floor-region height
-LEG_MAX_SLOPE     = 0.30    # max |dx/dy| to count as near-vertical
+LEG_MIN_LENGTH    = 0.25    # min leg segment as fraction of floor-region height
+LEG_MAX_SLOPE     = 0.15    # max |dx/dy| to count as near-vertical
+LEG_MIN_CLUSTER   = 2       # min Hough segments per cluster to count as a real leg
 STUCK_BASELINE_CM = 20.0
 STUCK_FLOW_PX     = 3.0
 
@@ -1013,7 +1014,7 @@ def detect_thin_legs(
     lines = cv2.HoughLinesP(
         edges,
         rho=1, theta=np.pi / 180,
-        threshold=12,
+        threshold=25,
         minLineLength=min_len,
         maxLineGap=6,
     )
@@ -1052,6 +1053,8 @@ def detect_thin_legs(
             clusters.append([seg])
 
     for cl in clusters:
+        if len(cl) < LEG_MIN_CLUSTER:   # single stray segment — ignore
+            continue
         cx     = float(np.mean([s[0] for s in cl]))
         y_bot  = float(max(s[1] for s in cl))
         cx_frac = cx / w

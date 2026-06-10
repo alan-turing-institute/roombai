@@ -24,6 +24,7 @@ STRATEGY FILE  /tmp/roomba_strategy.json
 """
 
 import argparse
+import collections
 import json
 import math
 import multiprocessing as mp
@@ -61,7 +62,8 @@ MOVE_SPEED      = 35    # cm/s forward speed
 MOVE_BURST      = 3.0   # seconds per forward burst
 SCAN_ROCK_CM    = 20    # forward distance (cm) rocked at each scan heading for flow depth
 
-DOOR_CONFIRM_FRAMES = 3
+DOOR_CONFIRM_FRAMES = 3    # positives needed to trigger approach
+DOOR_CONFIRM_WINDOW = 7    # sliding window length in frames (~14 s at 2 s/frame)
 DOOR_CONFIRM_MIN_CONF = 0.10   # ignore detections below this confidence
 SCAN_EVERY_BUMPS = 6           # pause for a 360° scan every N bumps
 MAP_SAVE_INTERVAL = 30         # seconds between periodic map saves
@@ -374,8 +376,8 @@ def _read_strategy():
 
 # ── Camera + vision thread ───────────────────────────────────────────────────
 def camera_thread():
-    frame_num          = 0
-    door_confirm_count = 0
+    frame_num        = 0
+    door_history: collections.deque[bool] = collections.deque(maxlen=DOOR_CONFIRM_WINDOW)
     prev_img:  np.ndarray | None              = None
     prev_odom: tuple[float, float, float] | None = None
 
@@ -502,7 +504,10 @@ def camera_thread():
         door = scene["door"]
         state_set(last_door=door)
 
-        if door["door_visible"] and door.get("confidence", 0) >= DOOR_CONFIRM_MIN_CONF:
+        detected = door["door_visible"] and door.get("confidence", 0) >= DOOR_CONFIRM_MIN_CONF
+        door_history.append(detected)
+
+        if detected:
             map_recorder.record_door(
                 odom.x, odom.y, odom.heading,
                 door.get("door_position") or "center",
@@ -512,13 +517,11 @@ def camera_thread():
             dist = door.get("door_distance_cm")
             log(
                 f"[DOOR] frame {frame_num}: {door['notes']} "
-                f"dist≈{dist}cm conf={door['confidence']:.2f}"
+                f"dist≈{dist}cm conf={door['confidence']:.2f} "
+                f"hits={sum(door_history)}/{len(door_history)}"
             )
-            door_confirm_count += 1
-        else:
-            door_confirm_count = 0
 
-        if door_confirm_count >= DOOR_CONFIRM_FRAMES:
+        if sum(door_history) >= DOOR_CONFIRM_FRAMES:
             mode = state_get("mode")
             dist = door.get("door_distance_cm") or 9999
 
@@ -527,7 +530,7 @@ def camera_thread():
                     log("[VISION] In doorway — stopping!")
                     speak("I am in the doorway. Mission complete.")
                     state_set(mode="STOP")
-                    door_confirm_count = 0
+                    door_history.clear()
 
             elif door["door_open"] and mode == "APPROACH":
                 pos    = door.get("door_position", "center")
@@ -544,13 +547,13 @@ def camera_thread():
                 log(f"[VISION] Open door on {pos} at ≈{dist:.0f}cm → APPROACH bearing={bearing:.0f}°")
                 speak(f"Door on the {pos}, about {int(dist)} centimetres. Approaching.")
                 state_set(mode="APPROACH", door_bearing=bearing)
-                door_confirm_count = 0
+                door_history.clear()
 
             elif not door["door_open"] and mode == "APPROACH":
                 log(f"[VISION] Door closed at ≈{dist:.0f}cm — WAIT")
                 speak("Door is closed. Waiting nearby.")
                 state_set(mode="WAIT")
-                door_confirm_count = 0
+                door_history.clear()
 
 
 # ── Movement thread ──────────────────────────────────────────────────────────
