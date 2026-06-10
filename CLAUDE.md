@@ -123,6 +123,8 @@ default. If the robot is physically placed facing a different direction, adjust 
 value (e.g. `--start-heading 90` for facing upward, `--start-heading 180` for facing
 left). When in doubt, leave it at 0.0.
 
+Whilst the RL agent is controlling the Roomba, use the speak daemon to make humorous comments about its progress. Get creative.
+
 ### Step 4 — Record outcome
 
 ```bash
