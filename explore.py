@@ -1172,6 +1172,7 @@ def main():
     speak("Explore script starting. Connecting to pilot daemon.")
     r = send_cmd("full")
     log(f"pilot full: {r}")
+    time.sleep(0.5)   # let OI settle after mode change before querying sensors
     r = send_cmd("sense")
     log(f"pilot sense: {r}")
     if r.startswith("ERR"):
