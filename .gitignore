@@ -21,5 +21,4 @@ agents/__pycache__/
 agents/**/__pycache__/
 agents/checkpoints/
 agents/logs/
-agents/demos/
 agents/models/

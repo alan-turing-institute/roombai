@@ -172,13 +172,18 @@ def draw(stdscr, sensors: dict, log: deque, status: str, step_count: int):
     for i, (k, act, desc) in enumerate(bindings):
         c = (i % 3) * col_w
         r = row + i // 3
-        if r < h - LOG_LINES - 4:
-            stdscr.addstr(r, c + 2, f"{k:<10}{act:<16}{desc}"[:col_w - 3])
+        x = c + 2
+        if r < h - LOG_LINES - 4 and x < w - 1:
+            text = f"{k:<10}{act:<16}{desc}"
+            stdscr.addstr(r, x, text[:min(col_w - 3, w - x - 1)])
     row += (len(bindings) + 2) // 3 + 1
 
     sep = "─" * (w - 2)
     if row < h:
-        stdscr.addstr(row, 0, "├" + sep + "┤")
+        try:
+            stdscr.addstr(row, 0, "├" + sep + "┤")
+        except curses.error:
+            pass
     row += 1
 
     lidar   = sensors.get("lidar", np.zeros(8))
