@@ -104,6 +104,9 @@ uv run train.py --resume models/pretrained.zip
 |------|---------|-------------|
 | `--timesteps N` | 1 000 000 | Total environment steps |
 | `--resume PATH` | — | Start from a checkpoint or pretrained `.zip` |
+| `--resume-best` | — | Shorthand for `--resume models/best/best_model.zip` |
+
+**Resuming from the best checkpoint:** `uv run train.py --resume-best --timesteps 500000` continues training for 500 000 *additional* steps from `models/best/best_model.zip`, regardless of how many steps it was originally trained for. The timestep counter is preserved (not reset).
 
 ### Output
 
@@ -321,17 +324,13 @@ The policy receives no absolute position — it must learn to navigate using onl
 
 | Observation | Simulator source | Real Roomba equivalent | Status |
 |---|---|---|---|
-| Lidar [0–7] — 8 rays (cm) | Raycast engine | None — no lidar on the robot | **Gap** |
-| Target distance [8] | Game state | None — no localisation system | **Gap** |
-| Door open [9] | Game state | Camera required | **Gap** |
-| sin/cos heading [10–11] | Simulator pose | Encoder odometry (`sense`, OI IDs 43–44) | Achievable |
+| Lidar [0–7] — 8 rays (cm) | Raycast engine | None — no lidar on the robot | **Gap (zeroed)** |
+| Target distance [8] | Game state | Dead reckoning from known start + encoder odometry | **Solved** |
+| Door open [9] | Game state | Hardcoded to open (1.0) — door assumed passable | **Approximated** |
+| sin/cos heading [10–11] | Simulator pose | Dead reckoning (accumulated turn commands) | **Solved** |
 | Bumpers [12] | `bumps` command | `bumps` command (identical) | **Direct** |
 
-The three critical gaps:
+`run_agent_real.py` implements the solved/approximated rows: it tracks (x, y, heading) by accumulating every `move`/`turn` command from a known start position (Enigma room spawn, facing right), then computes distance to Door 13 analytically. Lidar rays are zeroed.
 
-- **Lidar**: The iRobot Create 2 has 7 light-bump IR sensors (`LIGHTBUMP_*`, OI packet IDs 45–51) that detect nearby objects, but they return binary presence/absence rather than a continuous distance. They could substitute for the 8-float lidar if the policy were retrained or fine-tuned on binary proximity signals.
-- **Target distance**: Requires camera-based estimation or a localisation anchor (UWB tag, AprilTag, etc.). The onboard `rpicam-still` camera is the natural source but needs a small distance estimator model or visual heuristic.
-- **Door state**: A binary open/closed classifier on camera frames is sufficient.
-
-**The trained policy cannot run directly on the real robot in its current form.** It can serve as a strong starting point: adapt the observation (7 LIGHTBUMP booleans → obs[0–6], camera distance → obs[8], camera door classifier → obs[9]), then fine-tune on a small number of real-robot rollouts. The MLP is lightweight enough that even a few dozen real episodes should realign the weights to the adapted sensor modalities.
+**Remaining gap — lidar [0–7]:** The policy trained with 8 continuous-distance rays but receives all zeros on the real robot. In practice the bumper signal (obs[12]) partially compensates — the policy has learned to react to bumper hits — but it will not anticipate walls the way it does in simulation. The iRobot Create 2 has 7 light-bump IR sensors (`LIGHTBUMP_*`, OI packet IDs 45–51) that return binary proximity rather than continuous distance. Substituting these (obs[0–6] = LIGHTBUMP booleans) and fine-tuning for a small number of real episodes would close this gap.
 

@@ -122,5 +122,15 @@ if __name__ == "__main__":
     parser.add_argument("--timesteps", type=int, default=1_000_000)
     parser.add_argument("--resume", type=str, default=None,
                         help="Path to a checkpoint .zip to resume from")
+    parser.add_argument("--resume-best", action="store_true",
+                        help="Resume from models/best/best_model.zip")
     args = parser.parse_args()
-    train(total_timesteps=args.timesteps, resume_from=args.resume)
+
+    resume_from = args.resume
+    if args.resume_best:
+        best_path = "models/best/best_model.zip"
+        if not os.path.exists(best_path):
+            parser.error(f"--resume-best: {best_path} not found")
+        resume_from = best_path
+
+    train(total_timesteps=args.timesteps, resume_from=resume_from)
