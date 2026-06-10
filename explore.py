@@ -355,6 +355,7 @@ def capture_frame(path: Path) -> bool:
         r = subprocess.run(
             ["rpicam-still", "--nopreview",
              "--width", "2304", "--height", "1296",
+             "--quality", "50",
              "-o", str(path), "-t", "500"],
             capture_output=True, timeout=5,
         )
