@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # sync_run.sh — Live sync of Pi run data to a local runs/<timestamp>/ directory.
 #
-# Runs every 60 s in the background while explore.py is executing on the Pi.
+# Runs every 10 s in the background while explore.py is executing on the Pi.
 # Frames are downloaded incrementally (already-downloaded files are skipped).
 # All logs are re-downloaded every cycle because they grow during the run.
 #
@@ -62,10 +62,10 @@ while [[ ! -f "$STOP_FILE" ]]; do
     log_lines=$(wc -l < "$RUN_DIR/roomba_log.txt" 2>/dev/null || echo 0)
     echo "[$TS][sync] frames=$frame_count  maps=$map_count  log_lines=$log_lines"
 
-    # Sleep in 5-second increments so the stop file is noticed quickly
-    for _ in $(seq 1 12); do
+    # Sleep in 2-second increments so the stop file is noticed quickly
+    for _ in $(seq 1 5); do
         [[ -f "$STOP_FILE" ]] && break
-        sleep 5
+        sleep 2
     done
 done
 
