@@ -22,7 +22,7 @@ mkdir -p "$RUN_DIR/frames"
 rm -f "$STOP_FILE"
 
 rsync_pi() {
-    sshpass -p "$PI_PASS" rsync -az --ignore-missing-args "$@" 2>/dev/null || true
+    sshpass -p "$PI_PASS" rsync -az "$@" 2>/dev/null || true
 }
 
 echo "[sync] started — writing to $RUN_DIR"
