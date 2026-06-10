@@ -14,3 +14,10 @@
 # Project
 scratch/
 cargo_err.log
+
+# Python / agents
+agents/.venv/
+agents/__pycache__/
+agents/**/__pycache__/
+agents/checkpoints/
+agents/logs/
