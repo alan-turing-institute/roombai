@@ -1848,6 +1848,10 @@ pub fn get_walls() -> Vec<Segment> {
     walls.push(Segment { p1: pdf_pt(1289.66, 796.93), p2: pdf_pt(1289.77, 796.89) });
     walls.push(Segment { p1: pdf_pt(1256.64, 714.48), p2: pdf_pt(1269.90, 714.48) });
     walls.push(Segment { p1: pdf_pt(1108.70, 629.01), p2: pdf_pt(1108.70, 648.17) });
+    walls.push(Segment { p1: pdf_pt(115.20, 434.87), p2: pdf_pt(1613.54, 434.87) });
+    walls.push(Segment { p1: pdf_pt(1613.54, 434.87), p2: pdf_pt(1613.54, 876.63) });
+    walls.push(Segment { p1: pdf_pt(1613.54, 876.63), p2: pdf_pt(115.20, 876.63) });
+    walls.push(Segment { p1: pdf_pt(115.20, 876.63), p2: pdf_pt(115.20, 434.87) });
     walls
 }
 
