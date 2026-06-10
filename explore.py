@@ -766,6 +766,30 @@ def mover_thread():
     speak("Beginning room exploration.")
     log("[MOVER] starting pos=(0,0) heading=0°")
 
+    # ── Startup scan ──────────────────────────────────────────────────────────
+    # Quick 360° photo scan first: 8 × 45° turns, camera fires at each heading.
+    # If a door is found, APPROACH triggers immediately and we skip the rocker.
+    # If not, follow up with a full rocker scan (±20 cm rock per heading) for
+    # optical-flow depth data before starting exploration.
+    log("[MOVER] startup: quick 360° photo scan")
+    speak("Starting initial scan.")
+    _vision_idle.wait(timeout=15.0)   # ensure first vision frame is ready
+
+    for _ in range(8):
+        do_turn(-45)
+        time.sleep(2.2)               # let camera capture at this heading
+        if state_get("mode") in ("APPROACH", "STOP"):
+            break
+
+    if state_get("mode") not in ("APPROACH", "STOP"):
+        log("[MOVER] startup: door not found in photo scan — running rocker scan")
+        speak("No door found. Running depth scan.")
+        do_scan_360()
+
+    if state_get("mode") not in ("APPROACH", "STOP"):
+        log("[MOVER] startup: scans done — beginning exploration")
+        speak("Scans complete. Exploring.")
+
     while True:
         # Block until the camera thread has finished analysing the latest frame.
         # This ensures every movement decision is based on fresh scene data.
@@ -842,11 +866,15 @@ def mover_thread():
                 ev, map_fwd, _ = map_obs[0]
                 log(f"[MAP] APPROACH: known '{ev.label}' at {map_fwd:.0f}cm → steering")
                 do_turn(choose_avoid_turn(map_obs))
-            elif blocked.get("center") and nearest_cm and nearest_cm < AVOID_STEER_DIST_CM:
+            elif blocked.get("center") and (
+                nearest_cm is None or nearest_cm < AVOID_STEER_DIST_CM
+            ):
+                # Block on leg detection (nearest_cm=None) as well as close YOLO objects.
+                # Chair legs must not be driven through even in approach mode.
                 deg = choose_avoid_turn()
                 log(
-                    f"[MOVER] APPROACH: obstacle in center at ≈{nearest_cm:.0f}cm "
-                    f"→ steering {deg:+.0f}°"
+                    f"[MOVER] APPROACH: center blocked "
+                    f"(nearest≈{nearest_cm}cm) → steering {deg:+.0f}°"
                 )
                 speak("Obstacle ahead. Steering around.")
                 do_turn(deg)
@@ -855,15 +883,41 @@ def mover_thread():
             if status.startswith("bump"):
                 bump_R = "R" in status
                 _approach_bumps += 1
-                log(f"[MOVER] APPROACH: bump_{status[5:]} ({_approach_bumps}/5)")
-                # Back off safely (path is implicitly clear — we came from there)
+                log(f"[MOVER] APPROACH: bump_{status[5:]} ({_approach_bumps})")
                 do_reverse_safe(28, skip_check=True)
-                do_turn(45 if bump_R else -45)
-                if _approach_bumps >= 5:
-                    log("[MOVER] APPROACH: too many bumps — EXPLORE")
-                    speak("Too many bumps. Reassessing.")
-                    state_set(mode="EXPLORE")
+
+                if _approach_bumps >= 3:
+                    # Can't drive straight to door — sidestep around obstacle
+                    # cluster while keeping the door bearing in mind.
+                    # Do NOT go back to EXPLORE; maintain APPROACH mode.
+                    door_bearing_now = state_get("door_bearing")
+                    os_now  = state_get("open_space") or {}
+                    ol_now  = os_now.get("left",  0.0)
+                    or_now  = os_now.get("right", 0.0)
+                    if ol_now > or_now + DEPTH_SIDE_MARGIN:
+                        side_deg, side_str = +90.0, "left"
+                    elif or_now > ol_now + DEPTH_SIDE_MARGIN:
+                        side_deg, side_str = -90.0, "right"
+                    else:
+                        side_deg = 90.0 * _default_turn_sign
+                        _default_turn_sign *= -1
+                        side_str = "left" if side_deg > 0 else "right"
+                    log(
+                        f"[MOVER] APPROACH: detour {side_str} "
+                        f"(bearing {door_bearing_now}° preserved)"
+                    )
+                    speak(f"Obstacle cluster. Detouring {side_str}.")
+                    do_turn(side_deg)
+                    do_forward(MOVE_SPEED, 80.0 / MOVE_SPEED)
+                    # Re-orient toward door after sidestep
+                    if door_bearing_now is not None:
+                        delta_back = (door_bearing_now - odom.heading + 180) % 360 - 180
+                        if abs(delta_back) > 10:
+                            do_turn(delta_back)
                     _approach_bumps = 0
+                else:
+                    # Small correction turn while still trying straight approach
+                    do_turn(45 if bump_R else -45)
 
         # ── EXPLORE mode ──────────────────────────────────────────────────
         else:
