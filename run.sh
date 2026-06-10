@@ -26,7 +26,7 @@ TTS_LOG="/tmp/speak_daemon.log"
 SPEAK_QUEUE="/tmp/speak_queue.txt"
 
 # ── Parse arguments ───────────────────────────────────────────────────────────
-GREET_FLAG=""
+GREET_FLAG="--greet"
 for arg in "$@"; do
     case "$arg" in
         --greet) GREET_FLAG="--greet" ;;
