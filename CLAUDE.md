@@ -74,7 +74,7 @@ At the end of the run:
 
 ## Escape Strategy
 
-**Objective:** reach the door as fast as possible without losing the run to avoidable collisions or bad state. The overhead camera gives full room visibility: use it to navigate directly, but verify after every material move.
+**Objective:** reach the door as fast as possible without losing the run to avoidable collisions or bad state. The overhead camera gives full room visibility: use it to plan a direct route once, then execute decisively. Thinking time is the main enemy.
 
 ### Roomba dimensions
 - Diameter: ~34 cm, moves at 20 cm/s, turns at 60°/s
@@ -89,15 +89,20 @@ At the end of the run:
   ./roomba_pilot/target/debug/pilot send "safe"
   ```
 - Count every `pilot send`, including `safe`, `bumps`, `stop`, and recovery commands.
-- You have a hard 10 minute limit. When the door path is clear, favor decisive long moves over extra observation.
-- Never drive blind for more than ~12 seconds. Capture, reassess, then continue.
+- You have a hard 10 minute limit. The run should escape in under 2 minutes if the path is clear.
+- Spend at most 5-10 seconds analysing a frame. Make a reasonable estimate and move.
+- Aim for 4-6 total captures in a clean run: start, mid-room, doorway approach, escaped confirmation; add more only for bumps or uncertainty that would cause a crash.
+- When the door path is clear, favor decisive long moves over extra observation.
+- Never drive blind for more than ~15 seconds in open floor, or ~8 seconds near the doorway.
 - Prefer one clean turn plus one straight move over repeated tiny corrections.
+- Do not call `bumps` after every clean move. Use it after suspected contact, wheel-drop, unexpected non-movement, or before a risky doorway push.
+- Queue TTS briefly and keep moving; do not wait for narration to finish.
 - Keep at least one robot radius (~20 cm) of planned clearance from obstacles and doorposts. If the corridor is narrower than that, slow down and shorten moves.
 - If the camera read and bumper state disagree, trust the physical sensor first: stop, back off, capture, then re-plan.
 
-### Core decision loop
+### Fast-path decision loop
 
-At every decision point:
+Use this loop only at route gates, not after every tiny movement. Route gates are: start, after a large move, after an obstacle detour, within ~1 m of the door, after a bump, or when the robot's position does not match expectation.
 
 1. **Capture frame**
    ```bash
@@ -122,16 +127,16 @@ At every decision point:
    echo "<decision summary>" >> /tmp/speak_queue.txt
    ```
 
-5. **Execute command** (see phases below), then **increment tool call counter**
+5. **Execute one macro action** (see phases below), then **increment tool call counter for every command sent**
    ```bash
    sed -i "s/^TOOL_CALLS=.*/TOOL_CALLS=$(( $(grep TOOL_CALLS /tmp/run_state.env | cut -d= -f2) + 1 ))/" /tmp/run_state.env
    ```
 
-6. **Check robot state after movement**
+6. **Check robot state only when needed**
    ```bash
    ./roomba_pilot/target/debug/pilot send "bumps"
    ```
-   Increment the tool call counter for this command too. If any bumper or wheel-drop bit is active, use the recovery procedure before continuing.
+   Use this after suspected contact, near-threshold contact risk, or unexpected motion. Increment the tool call counter for this command too. If any bumper or wheel-drop bit is active, use the recovery procedure before continuing.
 
 ---
 
@@ -141,45 +146,57 @@ At every decision point:
 - Capture first frame; locate door opening and estimate Roomba heading.
 - Pick a target point: the centre of the doorway, biased slightly toward the wider-clearance side if obstacles crowd the centreline.
 - Compute angle delta to face that target.
-- Issue a single `turn <deg>` to align (+CCW / -CW). If the estimate is uncertain by > 20°, turn only most of the way, capture again, then finish alignment.
+- Issue a single `turn <deg>` to align (+CCW / -CW). If the estimate is uncertain by > 20°, still make the best turn estimate and continue; do not spend multiple frames perfecting orientation unless the first frame is unusable.
 
 ### Phase 2 — Drive to door (bulk of run)
 
-Use the longest move that is both clear and recoverable. The 10 minute limit rewards fast progress: if the overhead view shows a clean corridor to the doorway, take the distance. Do not choose a move that would carry the robot into the wall or past the doorway if the heading is wrong.
+Use macro actions: turn once, then drive most of the clear distance. The 10 minute limit rewards fast progress; if the overhead view shows a clean corridor to the doorway, take the distance. Do not choose a move that would carry the robot into the wall or past the doorway if the heading is wrong.
 
 | Distance to door | Command |
 |---|---|
-| > 260 cm, clear path | `./roomba_pilot/target/debug/pilot send "move 220"` |
-| 180 - 260 cm, clear path | `./roomba_pilot/target/debug/pilot send "move 160"` |
-| 100 - 180 cm, clear path | `./roomba_pilot/target/debug/pilot send "move 100"` |
-| 60 - 100 cm | `./roomba_pilot/target/debug/pilot send "move 60"` |
-| < 60 cm | Use Phase 3 |
+| > 300 cm, clear path | `./roomba_pilot/target/debug/pilot send "move 260"` |
+| 220 - 300 cm, clear path | `./roomba_pilot/target/debug/pilot send "move 200"` |
+| 140 - 220 cm, clear path | `./roomba_pilot/target/debug/pilot send "move 140"` |
+| 80 - 140 cm | `./roomba_pilot/target/debug/pilot send "move 80"` |
+| < 80 cm | Use Phase 3 |
 
-After each move: stop if needed, capture frame, check bumper state, then check heading drift. If drift > 12°, issue one correction `turn` before the next move. If drift is <= 12° and the path is clear, keep moving; do not waste time on cosmetic alignment.
+After a large move: capture frame, estimate heading drift, and continue. Skip bumper checks unless there was contact or suspicious motion. If drift > 15°, issue one correction `turn` before the next move. If drift is <= 15° and the path is clear, keep moving; do not waste time on cosmetic alignment.
+
+If a clear macro-route exists, execute it as a short command sequence before the next analysis. Example:
+
+```bash
+./roomba_pilot/target/debug/pilot send "turn <angle-to-door>"
+./roomba_pilot/target/debug/pilot send "move 220"
+source ./scripts/capture_frame.sh
+./roomba_pilot/target/debug/pilot send "turn <small-correction>"
+./roomba_pilot/target/debug/pilot send "move 120"
+```
+
+Do not narrate every sub-step. TTS should be one short sentence per macro action.
 
 If an obstacle blocks the direct path:
 
 - Choose the side with the larger visible gap and shortest return to the door centreline.
-- Turn 30-60° around the obstacle, move only far enough to clear it by at least one robot radius, then recapture.
+- Turn 30-60° around the obstacle, move far enough to clear it by at least one robot radius, then re-aim toward the door. If the detour is obvious, do both commands before recapturing.
 - Re-aim at the door centreline immediately after clearing; do not continue along the detour heading.
 
-Avoid moves below 60 cm until Phase 3 unless recovering from a bump or threading a narrow gap.
+Avoid moves below 80 cm until Phase 3 unless recovering from a bump or threading a narrow gap.
 
 ### Phase 3 — Thread the door (last ~1 m)
 
-- Capture and confirm the robot is facing the door opening, not the wall beside it.
+- Capture once and confirm the robot is facing the door opening, not the wall beside it.
 - Align to the door centreline. At the threshold, being centred matters more than being perfectly square.
-- Use short, deliberate moves:
+- Use short, deliberate moves, but do not stop between them if the first threshold push is clean:
 
 | Situation | Command |
 |---|---|
 | 80 - 140 cm from threshold and centred | `./roomba_pilot/target/debug/pilot send "move 80"` |
 | 60 - 80 cm from threshold and centred | `./roomba_pilot/target/debug/pilot send "move 60"` |
-| 20 - 60 cm from threshold | `./roomba_pilot/target/debug/pilot send "move 30"` |
-| Front at or just across threshold | `./roomba_pilot/target/debug/pilot send "move 60"` |
+| 20 - 60 cm from threshold and centred | `./roomba_pilot/target/debug/pilot send "move 50"` |
+| Front at or just across threshold | `./roomba_pilot/target/debug/pilot send "move 80"` |
 
 - If the robot is offset toward one jamb, turn 10-20° away from that jamb, move 20-30 cm, then turn back toward the doorway.
-- Once the front crosses the threshold, the priority is clearing the rear of the robot. Continue straight until the whole robot is outside the room, then finish.
+- Once the front crosses the threshold, the priority is clearing the rear of the robot. Continue straight immediately; do not capture again unless there is a bump or clear misalignment.
 
 ---
 
