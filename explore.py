@@ -65,6 +65,8 @@ SCAN_ROCK_CM    = 20    # forward distance (cm) rocked at each scan heading for 
 DOOR_CONFIRM_FRAMES = 3    # positives needed to trigger approach
 DOOR_CONFIRM_WINDOW = 7    # sliding window length in frames (~14 s at 2 s/frame)
 DOOR_CONFIRM_MIN_CONF = 0.10   # ignore detections below this confidence
+DOOR_FASTTRACK_CONF = 0.75     # single open-door detection above this → APPROACH immediately
+DOOR_SLOW_BURST     = 1.0      # forward burst (s) when door hit in current window
 
 CORNER_PROGRESS_CM  = 35   # min displacement (cm) between bumps to reset corner counter
 CORNER_ESCAPE_BUMPS = 3    # consecutive stuck bumps before executing corner escape
@@ -524,6 +526,25 @@ def camera_thread():
                 f"hits={sum(door_history)}/{len(door_history)}"
             )
 
+        # Fast-track: one very high-confidence open-door hit → APPROACH immediately
+        # without waiting for the sliding window.  Handles cases like frame 47
+        # (conf=0.94) where the robot moves away before accumulating 3 hits.
+        if (detected
+                and door.get("door_open")
+                and door.get("confidence", 0) >= DOOR_FASTTRACK_CONF
+                and state_get("mode") not in ("APPROACH", "STOP", "WAIT")):
+            pos     = door.get("door_position", "center")
+            offset  = {"left": 30, "center": 0, "right": -30}.get(pos, 0)
+            bearing = (odom.heading + offset) % 360
+            dist_ft = door.get("door_distance_cm") or 9999
+            log(
+                f"[VISION] FAST-TRACK conf={door['confidence']:.2f} open door "
+                f"{pos} at ≈{dist_ft:.0f}cm → APPROACH {bearing:.0f}°"
+            )
+            speak(f"High confidence door on the {pos}. Approaching now.")
+            state_set(mode="APPROACH", door_bearing=bearing)
+            door_history.clear()
+
         if sum(door_history) >= DOOR_CONFIRM_FRAMES:
             mode = state_get("mode")
             dist = door.get("door_distance_cm") or 9999
@@ -906,7 +927,14 @@ def mover_thread():
                 speak(f"Depth shows center blocked. Steering {'left' if deg > 0 else 'right'}.")
                 do_turn(deg)
 
-            status, _ = do_forward(MOVE_SPEED, MOVE_BURST)
+            # Shorten burst when a door is in the recent window — more frequent
+            # camera frames while the robot is still pointed at the opening.
+            last_door = state_get("last_door") or {}
+            burst = (DOOR_SLOW_BURST
+                     if last_door.get("door_visible")
+                     and last_door.get("confidence", 0) >= DOOR_CONFIRM_MIN_CONF
+                     else MOVE_BURST)
+            status, _ = do_forward(MOVE_SPEED, burst)
 
             if status.startswith("bump"):
                 side = "right" if "R" in status else "left"
