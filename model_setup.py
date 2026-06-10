@@ -340,6 +340,81 @@ def _resolve_model(name: str) -> tuple[Path | None, str]:
     return None, "unresolved — see log for manual steps"
 
 
+# ── Isolated inference smoke-test ────────────────────────────────────────────
+_SMOKE_SCRIPT = """\
+import sys, os, numpy as np
+sys.path.insert(0, os.getcwd())
+from vision import init_all_models, MODELS_AVAILABLE
+
+avail = init_all_models()
+name  = sys.argv[1]
+kind  = sys.argv[2]
+
+if not avail.get(name):
+    print(f"FAIL model '{name}' not available after init; avail={avail}")
+    sys.exit(1)
+
+dummy = np.zeros((8, 8, 3), dtype=np.uint8)
+try:
+    if kind == "hailo":
+        from vision import _hailo_infer
+        r = _hailo_infer(name, dummy)
+        if r is None:
+            raise RuntimeError("_hailo_infer returned None")
+    elif kind == "fast_depth":
+        from vision import _infer_fast_depth
+        r = _infer_fast_depth(dummy)
+        if r is None:
+            raise RuntimeError("_infer_fast_depth returned None")
+    elif kind == "door_yolo":
+        from vision import _infer_door_yolo
+        _infer_door_yolo(dummy)   # returns a list; just confirm it doesn't crash
+    print("OK")
+    sys.exit(0)
+except Exception as exc:
+    print(f"FAIL {exc}")
+    sys.exit(1)
+"""
+
+
+def _smoke_test(name: str, kind: str) -> tuple[bool, str]:
+    """
+    Run a live inference smoke-test in a subprocess isolated from the main
+    process.  This is critical: calling init_all_models() in-process would
+    create the Hailo VDevice here, preventing the vision child-process
+    (VisionProcess) from later acquiring it.
+
+    Returns (passed: bool, message: str).
+    kind: "hailo" | "fast_depth" | "door_yolo"
+    """
+    import tempfile
+    _log(f"{name}: running inference smoke-test ({kind})…")
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False
+        ) as tf:
+            tf.write(_SMOKE_SCRIPT)
+            tf_path = tf.name
+
+        result = subprocess.run(
+            [sys.executable, tf_path, name, kind],
+            capture_output=True, text=True, timeout=90,
+        )
+        Path(tf_path).unlink(missing_ok=True)
+
+        out = result.stdout.strip()
+        err = result.stderr.strip()
+        if result.returncode == 0 and out.endswith("OK"):
+            return True, "OK"
+        # Collapse stderr + stdout into a readable message
+        detail = (out + " " + err).strip()[:400]
+        return False, detail
+    except subprocess.TimeoutExpired:
+        return False, "smoke-test subprocess timed out after 90 s"
+    except Exception as e:
+        return False, f"smoke-test launch error: {e}"
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 def ensure_models(abort_if_required_missing: bool = True) -> dict[str, bool]:
     """
@@ -367,80 +442,88 @@ def ensure_models(abort_if_required_missing: bool = True) -> dict[str, bool]:
     _log(f"Hardware arch    : {HW_ARCH}")
     _log("=" * 60)
 
-    readiness: dict[str, bool] = {}
+    # failures[name] = human-readable reason; populated throughout this function.
+    # Any entry here will abort the run at the end.
+    failures: dict[str, str] = {}
 
-    # ── Hailo HEF models ─────────────────────────────────────────────────────
+    # ── Phase 1: Hailo HEF models ─────────────────────────────────────────────
     for name in MODEL_SPECS:
         _log(f"--- {name} ---")
-        hef_path, status = _resolve_model(name)
+        hef_path, file_status = _resolve_model(name)
 
-        if hef_path is not None:
-            # Update MODEL_SPECS so vision.py uses the resolved path
-            MODEL_SPECS[name]["hef"] = hef_path
-            # ── Live inference smoke-test ────────────────────────────────────
-            # Validating the HEF file alone does NOT catch SDK API changes.
-            # Run a dummy 1×1 image through the model to prove inference works.
-            _log(f"{name}: running live inference smoke-test…")
-            try:
-                import numpy as np
-                from vision import init_all_models, _hailo_infer
-                init_all_models()
-                dummy = np.zeros((1, 1, 3), dtype=np.uint8)
-                result = _hailo_infer(name, dummy)
-                if result is None:
-                    raise RuntimeError("infer returned None")
-                readiness[name] = True
-                _log(f"{name}: READY  {status}  (inference OK)")
-            except Exception as e:
-                _log(f"{name}: HEF file present but inference FAILED — {e}")
-                readiness[name] = False
-                info = MODEL_ZOO_INFO[name]
-                if info.get("required") and abort_if_required_missing:
-                    _speak(f"Required model {name} inference failed. Cannot start.")
-                    _log(
-                        f"\nFATAL: {name} HEF loaded but inference threw an error.\n"
-                        f"Check SDK compatibility. Error: {e}"
-                    )
-                    sys.exit(1)
+        if hef_path is None:
+            failures[name] = f"HEF file not found or unresolvable ({file_status})"
+            _log(f"{name}: MISSING — {file_status}")
+            continue
+
+        # File present — update MODEL_SPECS so vision.py finds it
+        MODEL_SPECS[name]["hef"] = hef_path
+        _log(f"{name}: file OK  ({file_status})")
+
+        # Live inference smoke-test (isolated subprocess — see _smoke_test)
+        ok, reason = _smoke_test(name, "hailo")
+        if ok:
+            _log(f"{name}: inference smoke-test PASSED ✓")
         else:
-            readiness[name] = False
-            _log(f"{name}: MISSING  {status}")
-            info = MODEL_ZOO_INFO[name]
-            if info.get("required") and abort_if_required_missing:
-                _speak(f"Required model {name} not available. Cannot start.")
-                _log(
-                    f"\nFATAL: {name} is required and could not be resolved.\n"
-                    f"Fix the model path or run the download steps above, then retry."
-                )
-                sys.exit(1)
+            # No automatic fix possible for Hailo — SDK API issues require a
+            # code change (already applied: async_infer → infer).  Record the
+            # failure and continue so all problems are reported together.
+            _log(f"{name}: inference smoke-test FAILED — {reason}")
+            failures[name] = f"inference failed: {reason}"
 
-    # ── fast_depth ONNX (CPU / onnxruntime, primary depth sensor) ────────────
-    _log("--- fast_depth (ONNX/CPU) ---")
-    readiness["fast_depth"] = _ensure_fast_depth_onnx()
-    if readiness["fast_depth"]:
-        _log(f"fast_depth: READY  {_FAST_DEPTH_ONNX_PATH}")
-    else:
-        _log("fast_depth: MISSING — depth will fall back to optical flow only")
+    # ── Phase 2: ONNX models (download + smoke-test; re-download on failure) ──
+    for onnx_name, ensure_fn, onnx_path, kind in [
+        ("fast_depth", _ensure_fast_depth_onnx, _FAST_DEPTH_ONNX_PATH, "fast_depth"),
+        ("door_yolo",  _ensure_door_yolo_onnx,  _DOOR_YOLO_ONNX_PATH,  "door_yolo"),
+    ]:
+        _log(f"--- {onnx_name} (ONNX/CPU) ---")
 
-    # ── door_yolo ONNX (CPU / onnxruntime, door panel detector) ──────────────
-    _log("--- door_yolo (ONNX/CPU) ---")
-    readiness["door_yolo"] = _ensure_door_yolo_onnx()
-    if readiness["door_yolo"]:
-        _log(f"door_yolo: READY  {_DOOR_YOLO_ONNX_PATH}")
-    else:
-        _log("door_yolo: MISSING — door detection will rely on OpenCV geometry only")
+        # Ensure the ONNX file exists
+        if not ensure_fn():
+            failures[onnx_name] = "ONNX file could not be downloaded or exported"
+            _log(f"{onnx_name}: MISSING")
+            continue
+        _log(f"{onnx_name}: file OK  ({onnx_path})")
 
-    ready   = [k for k, v in readiness.items() if v]
-    missing = [k for k, v in readiness.items() if not v]
+        # Smoke-test
+        ok, reason = _smoke_test(onnx_name, kind)
+        if ok:
+            _log(f"{onnx_name}: inference smoke-test PASSED ✓")
+            continue
+
+        # First attempt failed — try fixing by deleting and re-downloading
+        _log(f"{onnx_name}: smoke-test FAILED ({reason}) — attempting re-download…")
+        _speak(f"{onnx_name} failed. Attempting fix.")
+        try:
+            if onnx_path.exists():
+                onnx_path.unlink()
+        except Exception:
+            pass
+        if ensure_fn():
+            ok2, reason2 = _smoke_test(onnx_name, kind)
+            if ok2:
+                _log(f"{onnx_name}: re-download + smoke-test PASSED ✓")
+                continue
+            reason = reason2
+
+        failures[onnx_name] = f"inference failed after re-download attempt: {reason}"
+        _log(f"{onnx_name}: FAILED — {failures[onnx_name]}")
+
+    # ── Phase 3: Report and abort if anything failed ───────────────────────────
     _log("=" * 60)
-    _log(f"Ready  : {ready}")
-    _log(f"Missing: {missing}")
-    if missing:
-        _log("Missing models will be skipped; OpenCV door detection always runs.")
-        _speak(f"{len(missing)} optional models unavailable. Continuing with available models.")
-    else:
-        _log("All models ready.")
-        _speak("All vision models ready.")
-    _log("=" * 60)
+    if failures:
+        _log("PRE-FLIGHT FAILED — the following models could not be verified:")
+        for fname, freason in failures.items():
+            _log(f"  ✗  {fname}: {freason}")
+        _log("")
+        _log("The run cannot start until all models pass inference.")
+        _log("Fix the issues above and re-run.")
+        _log("=" * 60)
+        _speak("Pre-flight failed. Cannot start. Check the log.")
+        sys.exit(1)
 
-    return readiness
+    ready = list(MODEL_SPECS) + ["fast_depth", "door_yolo"]
+    _log(f"All models verified: {ready}")
+    _log("=" * 60)
+    _speak("All vision models verified. Starting run.")
+    return {name: True for name in ready}
