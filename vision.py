@@ -36,6 +36,11 @@ DOOR_WIDTH_CM     = 80.0
 CAMERA_HEIGHT_CM  = 20.0     # camera is ~20 cm off the floor
 ROBOT_WIDTH_CM    = 40.0     # Roomba diameter ≈ 2 × camera height
 OBSTACLE_BLOCK_DIST_CM = 200.0
+# Chair leg detection (thin near-vertical structures in the floor region)
+CHAIR_BBOX_EXPAND = 0.12    # expand detected chair x-extent by this fraction of frame width on each side
+LEG_FLOOR_FRAC    = 0.45    # analyse bottom LEG_FLOOR_FRAC of frame for legs
+LEG_MIN_LENGTH    = 0.12    # min leg segment as fraction of floor-region height
+LEG_MAX_SLOPE     = 0.30    # max |dx/dy| to count as near-vertical
 STUCK_BASELINE_CM = 20.0
 STUCK_FLOW_PX     = 3.0
 
@@ -639,7 +644,16 @@ def analyze_obstacles(
         dist   = det.get("distance_cm") or scene_depth_cm
         real_h = det.get("real_height_cm")
 
-        at_floor     = y2 > floor_threshold
+        # Chairs: YOLO boxes the seat but the legs extend to the floor and
+        # spread wider than the seat.  Expand the x-extent and always treat
+        # as floor-level so the mover keeps clear of the whole leg footprint.
+        is_chair = det.get("class_name") == "chair"
+        if is_chair:
+            margin = int(frame_w * CHAIR_BBOX_EXPAND)
+            x1 = max(0, x1 - margin)
+            x2 = min(frame_w, x2 + margin)
+
+        at_floor     = is_chair or (y2 > floor_threshold)
         within_range = dist is None or dist < OBSTACLE_BLOCK_DIST_CM
         blocking     = at_floor and within_range
 
@@ -814,6 +828,105 @@ def detect_door_cv(
         return {**null, "notes": f"cv error: {e}"}
 
 
+# ── Thin chair-leg detector ───────────────────────────────────────────────────
+def detect_thin_legs(
+    img_bgr: np.ndarray,
+    scene_depth_cm: float | None = None,
+) -> dict:
+    """
+    Detect thin near-vertical structures (chair legs) in the floor region.
+
+    Looks at the bottom LEG_FLOOR_FRAC of the frame using Canny + HoughLinesP
+    tuned for thin (~1 cm diameter) near-vertical lines.  Returns a dict with
+    the same shape as build_obstacle_map's output so it can be merged in.
+
+    blocked  dict  left/center/right — True when a leg cluster occupies that third
+    legs     list  x-centre fractions of detected leg clusters (for logging)
+    """
+    h, w = img_bgr.shape[:2]
+    floor_top = int(h * (1.0 - LEG_FLOOR_FRAC))
+    roi = img_bgr[floor_top:, :]
+    roi_h = roi.shape[0]
+
+    gray  = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    blur  = cv2.GaussianBlur(gray, (3, 3), 0)
+    edges = cv2.Canny(blur, 40, 120)
+
+    min_len = int(roi_h * LEG_MIN_LENGTH)
+    lines = cv2.HoughLinesP(
+        edges,
+        rho=1, theta=np.pi / 180,
+        threshold=12,
+        minLineLength=min_len,
+        maxLineGap=6,
+    )
+
+    blocked = {"left": False, "center": False, "right": False}
+    leg_xs: list[float] = []
+
+    if lines is None:
+        return {"blocked": blocked, "legs": leg_xs}
+
+    # Keep only near-vertical segments and cluster by x-position
+    xs: list[float] = []
+    for line in lines:
+        x1l, y1l, x2l, y2l = line[0]
+        dy = abs(y2l - y1l)
+        dx = abs(x2l - x1l)
+        if dy == 0:
+            continue
+        if dx / dy > LEG_MAX_SLOPE:   # too diagonal — not a leg
+            continue
+        xs.append((x1l + x2l) / 2.0)
+
+    if not xs:
+        return {"blocked": blocked, "legs": leg_xs}
+
+    # Simple 1-D clustering: merge x-positions within 15 px of each other
+    xs.sort()
+    clusters: list[list[float]] = [[xs[0]]]
+    for x in xs[1:]:
+        if x - clusters[-1][-1] < 15:
+            clusters[-1].append(x)
+        else:
+            clusters.append([x])
+
+    for cl in clusters:
+        cx = float(np.mean(cl))
+        cx_frac = cx / w
+        leg_xs.append(round(cx_frac, 3))
+
+        # Estimate real-world clearance: use ROBOT_WIDTH_CM at scene depth
+        # to decide whether this leg actually threatens the robot's path.
+        if scene_depth_cm and scene_depth_cm > 0:
+            robot_px = ROBOT_WIDTH_CM * FOCAL_PX / scene_depth_cm
+            left_clear  = cx > robot_px / 2          # enough room on the left of this leg
+            right_clear = (w - cx) > robot_px / 2   # enough room on the right
+        else:
+            left_clear  = cx > w * 0.15
+            right_clear = (w - cx) > w * 0.15
+
+        # Mark the third the leg sits in, and any third where the robot can't
+        # fit between the leg and the frame edge.
+        third = w / 3
+        if cx < third:
+            blocked["left"] = True
+            if not right_clear:
+                blocked["center"] = True
+        elif cx > 2 * third:
+            blocked["right"] = True
+            if not left_clear:
+                blocked["center"] = True
+        else:
+            blocked["center"] = True
+            if not left_clear:
+                blocked["left"] = True
+            if not right_clear:
+                blocked["right"] = True
+
+    return {"blocked": blocked, "legs": leg_xs}
+
+
 # ── Main scene analysis ───────────────────────────────────────────────────────
 def analyze_scene(
     img_bgr: np.ndarray,
@@ -861,10 +974,26 @@ def analyze_scene(
         detections = _parse_yolo_boxes(raw, orig_w, orig_h, depth_map, scene_depth_cm,
                                        flow_field, baseline_cm)
 
-    # 4. Obstacle map
+    # 4. Obstacle map (YOLO detections + chair-leg geometry)
     obstacles = analyze_obstacles(
         detections, orig_w, orig_h, scene_depth_cm, flow_field, baseline_cm
     )
+    leg_result = detect_thin_legs(img_bgr, scene_depth_cm=scene_depth_cm)
+    if any(leg_result["blocked"].values()):
+        for side, val in leg_result["blocked"].items():
+            if val:
+                obstacles["blocked"][side] = True
+        # Recompute clear_path after merging leg blocks
+        obstacles["clear_path"] = next(
+            (c for c in ("center", "right", "left") if not obstacles["blocked"][c]),
+            None,
+        )
+        if leg_result["legs"]:
+            print(
+                f"[vision] legs detected at x-fracs={leg_result['legs']} "
+                f"blocking={[s for s, v in leg_result['blocked'].items() if v]}",
+                flush=True,
+            )
 
     # 5. Open-space map from depth
     open_space = (
