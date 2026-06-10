@@ -1172,9 +1172,17 @@ async fn main() {
         Vec::new()
     };
 
-    // Door timer: all non-external doors toggle open/closed every 5 simulated seconds
+    // Door timer: all non-external doors toggle open/closed every 5 simulated seconds.
+    // Start with phase=true (open) to match Door 13's initial is_open:true state so
+    // the first toggle at t=5s closes all doors consistently.
     let mut door_timer: f32 = 0.0;
-    let mut door_phase_open = false;
+    let mut door_phase_open = true;
+    // Sync all non-external doors to the initial phase so nothing is out of step.
+    for door in doors.iter_mut() {
+        if !door.is_external {
+            door.is_open = door_phase_open;
+        }
+    }
 
     let print_diagnostics = |obs: &[Obstacle], hums: &[Human]| {
         let enigma_obs_count = obs.iter().filter(|o| {
@@ -1252,7 +1260,11 @@ async fn main() {
             roomba_door_side = None;
             door_crossed_sign = None;
             door_timer = 0.0;
-            door_phase_open = false;
+            door_phase_open = true;
+            doors = map_data::get_doors();
+            for door in doors.iter_mut() {
+                if !door.is_external { door.is_open = door_phase_open; }
+            }
             obstacles = generate_obstacles(roomba_start_pos, &walls, &doors, &room_labels);
             humans = if include_humans {
                 generate_humans(&room_labels, &walls, &doors)
@@ -1281,7 +1293,11 @@ async fn main() {
             roomba_door_side = None;
             door_crossed_sign = None;
             door_timer = 0.0;
-            door_phase_open = false;
+            door_phase_open = true;
+            doors = map_data::get_doors();
+            for door in doors.iter_mut() {
+                if !door.is_external { door.is_open = door_phase_open; }
+            }
             obstacles = generate_obstacles(roomba_start_pos, &walls, &doors, &room_labels);
             humans = if include_humans {
                 generate_humans(&room_labels, &walls, &doors)
@@ -1722,7 +1738,11 @@ async fn main() {
                 roomba_door_side = None;
                 door_crossed_sign = None;
                 door_timer = 0.0;
-                door_phase_open = false;
+                door_phase_open = true;
+                doors = map_data::get_doors();
+                for door in doors.iter_mut() {
+                    if !door.is_external { door.is_open = door_phase_open; }
+                }
                 obstacles = generate_obstacles(roomba_start_pos, &walls, &doors, &room_labels);
                 humans = if include_humans {
                     generate_humans(&room_labels, &walls, &doors)
