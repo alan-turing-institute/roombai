@@ -128,6 +128,7 @@ _vision_idle.set()  # no analysis in progress at startup
 # (heading or position will change, making the current photo stale).
 # do_forward() waits on this before every drive burst.
 _rest_photo_ready = threading.Event()
+_last_capture_time: float = 0.0   # monotonic time of the last successful capture
 
 
 # ── Vision child-process worker ───────────────────────────────────────────────
@@ -402,20 +403,23 @@ def camera_thread():
         time.sleep(FRAME_INTERVAL)
 
         # Skip capture if the robot hasn't moved or turned since the last photo,
-        # BUT only when a rest photo isn't still needed.  If _rest_photo_ready is
-        # not set, the mover is waiting for a stationary photo — don't skip.
+        # BUT only when: (a) a rest photo isn't still needed, AND (b) less than
+        # 5 s have elapsed since the last capture.  The 5 s override ensures the
+        # robot always has fresh scene data when stationary for an extended period.
         if prev_odom is not None and _rest_photo_ready.is_set():
-            pre = odom.snapshot()
-            d_pos = math.hypot(pre[0] - prev_odom[0], pre[1] - prev_odom[1])
-            d_hdg = abs((pre[2] - prev_odom[2] + 180) % 360 - 180)
-            if d_pos < MIN_MOVE_CM and d_hdg < MIN_TURN_DEG:
-                continue
+            if time.monotonic() - _last_capture_time < 5.0:
+                pre = odom.snapshot()
+                d_pos = math.hypot(pre[0] - prev_odom[0], pre[1] - prev_odom[1])
+                d_hdg = abs((pre[2] - prev_odom[2] + 180) % 360 - 180)
+                if d_pos < MIN_MOVE_CM and d_hdg < MIN_TURN_DEG:
+                    continue
 
         frame_num += 1
         path = FRAME_DIR / f"frame_{frame_num:05d}.jpg"
 
         if not capture_frame(path):
             continue
+        _last_capture_time = time.monotonic()
 
         # Write to a temp file then rename atomically so that rsync / the Read
         # tool never sees a half-written JPEG when they sample _CURRENT_FRAME.
@@ -640,8 +644,9 @@ def mover_thread():
           status: "ok" | "bump_L" | "bump_R" | "bump_LR"
         """
         # Never drive without a photo analysed at the current stopped position.
-        if not _rest_photo_ready.wait(timeout=10.0):
-            log("[MOVER] WARNING: rest photo timeout — proceeding anyway")
+        # The 5 s stationary rule in the camera thread guarantees delivery within
+        # ~7 s, so this wait resolves quickly in normal operation.
+        _rest_photo_ready.wait(timeout=10.0)
         _rest_photo_ready.clear()   # position/heading will change during drive
 
         elapsed = 0.0
