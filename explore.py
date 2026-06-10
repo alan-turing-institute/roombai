@@ -821,7 +821,16 @@ def mover_thread():
     # providing depth, falls back to the optical-flow rock (~102 s).
     log("[MOVER] startup: 360° scan")
     speak("Starting initial scan.")
-    _vision_idle.wait(timeout=15.0)   # ensure first vision frame is ready
+    # _vision_idle starts SET (no analysis running), so .wait() returns immediately
+    # before any frame has been captured.  Poll until the camera thread has
+    # delivered at least one analysed frame with depth data.
+    deadline = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
+        if state_get("frames_captured") and state_get("scene_depth_cm") is not None:
+            break
+        time.sleep(0.2)
+    log(f"[MOVER] first frame ready: depth={state_get('scene_depth_cm')}cm "
+        f"frames={state_get('frames_captured')}")
     do_scan_360()
     _last_scan_x, _last_scan_y = odom.x, odom.y
 
