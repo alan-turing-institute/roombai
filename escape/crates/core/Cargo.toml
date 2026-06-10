@@ -1,0 +1,10 @@
+[package]
+name = "escape-core"
+version = "0.1.0"
+edition = "2021"
+
+# Shared, I/O-free types for the escape stack. Named `escape-core` (not `core`)
+# so it never shadows the std `core` crate; the crate path is `escape_core`.
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }

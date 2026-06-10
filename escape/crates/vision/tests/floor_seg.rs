@@ -28,10 +28,20 @@ fn load_frame(name: &str) -> (Vec<u8>, u32, u32) {
     (img.into_raw(), w, h)
 }
 
+/// The known-floor prior, built once from the (non-holdout) fixtures — the same
+/// gate the production pipeline runs with, so these tests exercise it too.
+fn training_prior() -> &'static vision::FloorPrior {
+    static PRIOR: std::sync::OnceLock<vision::FloorPrior> = std::sync::OnceLock::new();
+    PRIOR.get_or_init(|| {
+        vision::fixture::build_floor_prior(&fixtures_dir()).expect("build floor prior")
+    })
+}
+
 fn params_for(label: &FloorLabel) -> Params {
     Params {
         n_columns: label.n_columns(),
         ignore_rect: label.ignore_rect.map(|[x, y, w, h]| (x, y, w, h)),
+        floor_prior: Some(training_prior().clone()),
         ..Default::default()
     }
 }
@@ -108,6 +118,37 @@ fn boundary_matches_labels() {
     );
     assert!(gross.is_empty(), "gross per-image failures:\n{}", gross.join("\n"));
     assert!(mean <= MEAN_MAE_MAX, "mean MAE {mean:.3} > {MEAN_MAE_MAX}");
+}
+
+/// Regression for the near-obstacle false-open bug: when the robot is so close
+/// to an object that the object fills the frame (here `near_wall.jpg` — pressed
+/// against the wood door, no floor visible), the segmenter must NOT report open
+/// floor. Today it seeds its floor model from the bottom-centre patch, which is
+/// sampling the wall, so the wall becomes "floor" and `free_frac` reads ~open.
+///
+/// Fixed by the floor-model-prior seed gate (SPEC §4.2): the seed patch here is
+/// the wall, which doesn't match the known-floor prior, so the frame is reported
+/// blocked instead of open.
+#[test]
+fn near_obstacle_not_reported_as_open() {
+    let labels = load_dir(&labels_dir()).expect("load labels");
+    let label = labels
+        .iter()
+        .find(|l| l.image == "near_wall.jpg")
+        .expect("near_wall fixture present");
+    let (rgb, w, h) = load_frame(&label.image);
+    let frame = Frame { width: w, height: h, rgb: &rgb };
+    let fs = segment_floor(&frame, &params_for(label));
+    let n = fs.columns.len() as f32;
+    let mean = fs.columns.iter().map(|c| c.free_frac).sum::<f32>() / n;
+    let max = fs.columns.iter().map(|c| c.free_frac).fold(0.0f32, f32::max);
+    // A wall in the robot's face is not drivable: no column should look more
+    // than ~40% open, and on average it should read essentially blocked.
+    assert!(
+        max < 0.40 && mean < 0.25,
+        "near-obstacle frame read as open floor: max free_frac {max:.2}, mean {mean:.2} \
+         (expected max<0.40, mean<0.25)"
+    );
 }
 
 #[test]

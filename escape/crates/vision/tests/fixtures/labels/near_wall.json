@@ -1,0 +1,16 @@
+{
+  "image": "near_wall.jpg",
+  "width": 640,
+  "height": 360,
+  "notes": "Robot pressed up against the wood door/wall; the surface fills the entire frame and no floor is visible, so there is no drivable space ahead (free_frac ~0). The current segmenter seeds its floor model from the bottom-centre patch, which here samples the wall itself, so the wall becomes the floor model and the frame reads as wide-open -- the near-obstacle false-open bug (SPEC 4.2). Held out of tuning; target for the floor-model-bank / texture work.",
+  "columns": [
+    0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.04,
+    0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.04,
+    0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.04
+  ],
+  "floor_points": [],
+  "obstacle_points": [[320, 80], [160, 180], [480, 180], [320, 260]],
+  "ignore_rect": null,
+  "tolerance": 0.1,
+  "holdout": true
+}

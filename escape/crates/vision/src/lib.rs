@@ -15,6 +15,9 @@
 //! `tools/vision_label/prototype_seg.py`); mean abs per-column error ≈ 0.07.
 
 pub mod fixture;
+pub mod floor_prior;
+
+pub use floor_prior::{FloorPrior, FloorPriorBuilder};
 
 /// One column's view of how far the floor extends before the first obstacle.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -73,6 +76,21 @@ pub struct Params {
     pub row_smooth: usize,
     /// Median-filter width applied across the output columns.
     pub col_smooth: usize,
+    /// Known-floor appearance prior. When set, the seed patch is gated against
+    /// it: if the patch the segmenter is about to adopt as its floor model does
+    /// not look like known floor, the frame is reported blocked rather than
+    /// letting a near obstacle (a wall in the bumper's face) masquerade as open
+    /// floor. `None` disables the gate (legacy adaptive-only behaviour).
+    pub floor_prior: Option<FloorPrior>,
+    /// A seed pixel counts as floor-like if its prior likelihood ≥ this.
+    pub prior_pixel_thresh: f32,
+    /// The seed patch is trusted only if at least this fraction of it is
+    /// floor-like under the prior; below this the frame is reported blocked.
+    pub seed_floor_frac: f32,
+    /// The seed patch's texture energy must be at least this fraction of the
+    /// prior's mean floor texture; a near-flat patch (smooth wall/door, same
+    /// colour as the floor) falls below it and the frame is reported blocked.
+    pub seed_texture_min_frac: f32,
 }
 
 impl Default for Params {
@@ -91,12 +109,18 @@ impl Default for Params {
             run: 4,
             row_smooth: 5,
             col_smooth: 3,
+            // Gate off by default so the type has no data dependency; the
+            // pipeline and tests opt in by attaching a prior.
+            floor_prior: None,
+            prior_pixel_thresh: 0.01,
+            seed_floor_frac: 0.5,
+            seed_texture_min_frac: 0.3,
         }
     }
 }
 
 /// RGB (0..=255) -> (hue 0..360, sat 0..1, val 0..1). Mirrors the prototype.
-fn rgb_to_hsv(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+pub(crate) fn rgb_to_hsv(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
     let (r, g, b) = (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
     let mx = r.max(g).max(b);
     let mn = r.min(g).min(b);
@@ -111,12 +135,18 @@ fn rgb_to_hsv(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
     (h, df / (mx + 1e-9), mx)
 }
 
-fn bin_index(r: u8, g: u8, b: u8, p: &Params) -> usize {
+/// HSV-histogram bin for a pixel, given the bin resolution. Shared by the live
+/// per-frame model ([`Params`]) and the [`FloorPrior`] so both index alike.
+pub(crate) fn hsv_bin(r: u8, g: u8, b: u8, h_bins: usize, s_bins: usize, v_bins: usize) -> usize {
     let (h, s, v) = rgb_to_hsv(r, g, b);
-    let hi = ((h / 360.0 * p.h_bins as f32) as usize).min(p.h_bins - 1);
-    let si = ((s * p.s_bins as f32) as usize).min(p.s_bins - 1);
-    let vi = ((v * p.v_bins as f32) as usize).min(p.v_bins - 1);
-    (hi * p.s_bins + si) * p.v_bins + vi
+    let hi = ((h / 360.0 * h_bins as f32) as usize).min(h_bins - 1);
+    let si = ((s * s_bins as f32) as usize).min(s_bins - 1);
+    let vi = ((v * v_bins as f32) as usize).min(v_bins - 1);
+    (hi * s_bins + si) * v_bins + vi
+}
+
+fn bin_index(r: u8, g: u8, b: u8, p: &Params) -> usize {
+    hsv_bin(r, g, b, p.h_bins, p.s_bins, p.v_bins)
 }
 
 /// Box filter (width `k`) over a slice, edge-clamped, returned as a new Vec.
@@ -166,13 +196,48 @@ pub fn segment_floor(frame: &Frame, params: &Params) -> FreeSpace {
     let c0 = ((0.5 - params.seed_width / 2.0) * w as f32) as usize;
     let c1 = ((0.5 + params.seed_width / 2.0) * w as f32) as usize;
     let mut hist = vec![0u32; params.h_bins * params.s_bins * params.v_bins];
+    // While seeding, also measure how much of the seed patch looks like known
+    // floor — by colour (prior backprojection) and by texture (local |∇|) — to
+    // gate the whole frame below.
+    let (mut seed_total, mut seed_floorish) = (0u32, 0u32);
+    let (mut seed_grad_sum, mut seed_grad_n) = (0i64, 0u32);
     for y in r0..h {
         for x in c0..c1 {
             let (r, g, b) = px(x, y);
             hist[bin_index(r, g, b, params)] += 1;
+            if let Some(prior) = &params.floor_prior {
+                seed_total += 1;
+                if prior.likelihood(r, g, b) >= params.prior_pixel_thresh {
+                    seed_floorish += 1;
+                }
+                if x + 1 < c1 && y + 1 < h {
+                    let g0 = floor_prior::luma(r, g, b);
+                    let (rr, rg, rb) = px(x + 1, y);
+                    let (dr, dg, db) = px(x, y + 1);
+                    seed_grad_sum += (floor_prior::luma(rr, rg, rb) - g0).abs() as i64
+                        + (floor_prior::luma(dr, dg, db) - g0).abs() as i64;
+                    seed_grad_n += 1;
+                }
+            }
         }
     }
     let hmax = *hist.iter().max().unwrap_or(&1) as f32;
+
+    // Seed gate: the segmenter is about to treat the seed patch as floor. If the
+    // patch doesn't look like known floor — wrong colour (a coloured obstacle)
+    // OR too smooth (a same-coloured flat wall/door) — the robot is staring at
+    // an obstacle, so report blocked rather than letting it pass as open floor.
+    if let Some(prior) = &params.floor_prior {
+        let floor_frac = if seed_total > 0 { seed_floorish as f32 / seed_total as f32 } else { 0.0 };
+        let seed_texture =
+            if seed_grad_n > 0 { seed_grad_sum as f32 / seed_grad_n as f32 } else { 0.0 };
+        let texture_ok = seed_texture >= params.seed_texture_min_frac * prior.floor_texture_mean;
+        if floor_frac < params.seed_floor_frac || !texture_ok {
+            return FreeSpace {
+                columns: vec![Column { free_frac: 0.0, confidence: 1.0 - floor_frac.min(1.0) }; n],
+            };
+        }
+    }
 
     // 2. Per-pixel floor mask via normalised backprojection >= density.
     //    ignore_rect pixels are forced to "floor" so they never form a boundary.

@@ -1,0 +1,12 @@
+[package]
+name = "planner"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+escape-core = { path = "../core" }
+vision = { path = "../vision" }
+
+[dev-dependencies]
+# Used only by the offline steer_overlay example to load/save frames.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
