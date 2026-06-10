@@ -3,7 +3,7 @@
 ## Goal
 
 You are controlling a Roomba cleaning robot. A camera is mounted on it.
-The task is to escape the room via the door in the picture below as fast as possible.
+The task is to escape the room via the door in the picture below as fast as possible. You have maximum ten minutes.
 
 <img width="1200" height="1600" alt="WhatsApp Image 2026-06-09 at 11 40 31" src="https://github.com/user-attachments/assets/804b6888-55b2-4210-97f1-70847406afba" />
 
@@ -75,3 +75,5 @@ At the end of the run:
 ## Escape Strategy
 
 <!-- Each competitor defines their own strategy here. -->
+ 
+ Explore aggressively the room. Everytime you bump into something use the camera to pick the best new direction.
