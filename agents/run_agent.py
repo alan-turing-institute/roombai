@@ -32,28 +32,58 @@ def speak(msg: str) -> None:
 
 
 def get_shielded_action(obs, predicted_action, action_history) -> tuple[int, str | None]:
-    # Rule 1: Bumper active (obs[12] is normalized bumper state)
-    if obs[12] > 0.5:
-        if predicted_action != 1:
-            return 1, "Bumper active override: forcing backup (move -15)"
-        return predicted_action, None
-
-    # Rule 2: Front proximity safety
-    # obs[0] is front lidar, normalized to 500 cm.
     front_dist_cm = obs[0] * 500.0
-    if front_dist_cm < 40.0 and predicted_action == 0:
-        left_dist_cm = obs[2] * 500.0
-        right_dist_cm = obs[6] * 500.0
-        if left_dist_cm >= right_dist_cm:
-            return 2, f"Front obstacle too close ({front_dist_cm:.1f} cm) override: turning left (turn 45)"
-        else:
-            return 3, f"Front obstacle too close ({front_dist_cm:.1f} cm) override: turning right (turn -45)"
+    back_dist_cm = obs[4] * 500.0
+    left_dist_cm = obs[2] * 500.0
+    right_dist_cm = obs[6] * 500.0
+    bumper_active = obs[12] > 0.5
 
-    # Rule 3: Oscillation prevention
+    # 1. Stuck / Oscillation detection
+    is_stuck = False
+    stuck_reason = ""
+    
+    # Check for alternating turn loop (e.g., [2, 3, 2, 3] or [3, 2, 3, 2])
     if len(action_history) >= 4:
         last_four = list(action_history)[-4:]
-        if (last_four == [2, 3, 2, 3] or last_four == [3, 2, 3, 2]) and predicted_action in [2, 3]:
-            return 4, "Oscillation loop detected override: forcing turn 90 to break cycle"
+        if last_four == [2, 3, 2, 3] or last_four == [3, 2, 3, 2]:
+            is_stuck = True
+            stuck_reason = "oscillation loop"
+            
+    # Check for spinning in place while front is close (e.g. 4 turns in a row)
+    if not is_stuck and len(action_history) >= 4 and front_dist_cm < 40.0:
+        last_four = list(action_history)[-4:]
+        if all(a in [2, 3, 4] for a in last_four):
+            is_stuck = True
+            stuck_reason = "spinning in place"
+
+    if is_stuck:
+        if back_dist_cm > 20.0:
+            action_history.clear()
+            return 1, f"{stuck_reason.capitalize()} detected override: forcing backup (move -15) to escape"
+        else:
+            action_history.clear()
+            return 4, f"{stuck_reason.capitalize()} detected override: forcing turn 90 to break cycle"
+
+    # 2. Bumper Active Check
+    if bumper_active:
+        if predicted_action != 1:
+            if back_dist_cm > 15.0:
+                return 1, "Bumper active override: forcing backup (move -15)"
+            else:
+                if left_dist_cm >= right_dist_cm:
+                    return 4, "Bumper active (rear blocked) override: forcing turn 90"
+                else:
+                    return 3, "Bumper active (rear blocked) override: forcing turn right (turn -45)"
+
+    # 3. Proximity check
+    if front_dist_cm < 40.0 and predicted_action == 0:
+        if front_dist_cm < 25.0 and back_dist_cm > 20.0:
+            return 1, f"Front obstacle extremely close ({front_dist_cm:.1f} cm) override: forcing backup (move -15)"
+        else:
+            if left_dist_cm >= right_dist_cm:
+                return 2, f"Front obstacle too close ({front_dist_cm:.1f} cm) override: turning left (turn 45)"
+            else:
+                return 3, f"Front obstacle too close ({front_dist_cm:.1f} cm) override: turning right (turn -45)"
 
     return predicted_action, None
 
