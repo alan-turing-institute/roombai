@@ -36,9 +36,14 @@ agents/
 ├── roomba_env.py       # Custom Gymnasium environment
 ├── train.py            # PPO training script
 ├── run_agent.py        # Run a trained agent with TTS narration
+├── manual_control.py   # Keyboard-driven manual control TUI
+├── record_demo.py      # Record successful manual runs as imitation-learning demos
+├── pretrain.py         # Behavioural cloning pretraining from recorded demos
+├── demos/              # Saved demo files (demo_*.npz) — gitignored
 ├── checkpoints/        # Auto-saved checkpoints (created during training)
 ├── models/
-│   └── best/           # Best model saved by EvalCallback
+│   ├── best/           # Best model saved by EvalCallback
+│   └── pretrained.zip  # BC-pretrained model (input to --resume)
 └── logs/               # TensorBoard logs + training_progress.csv
 ```
 
@@ -71,17 +76,36 @@ The simulator listens on `127.0.0.1:9999`.
 
 ## Training
 
+Start the simulator at 20× speed first:
+
+```bash
+cargo run --release -p simulator -- 20
+```
+
+### Option A — cold start (pure RL from scratch)
+
 ```bash
 cd agents
 uv run train.py
 ```
 
-Options:
+### Option B — warm start (recommended)
+
+Record a few successful manual runs first, pretrain via behavioural cloning, then let PPO fine-tune. See [Imitation Learning Pretraining](#imitation-learning-pretraining) for the full workflow.
+
+```bash
+cd agents
+uv run train.py --resume models/pretrained.zip
+```
+
+### Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--timesteps N` | 1 000 000 | Total environment steps |
-| `--resume PATH` | — | Resume from a checkpoint `.zip` |
+| `--resume PATH` | — | Start from a checkpoint or pretrained `.zip` |
+
+### Output
 
 Training progress is written to:
 - `logs/training_progress.csv` — per-episode steps, reward, success flag
@@ -89,7 +113,7 @@ Training progress is written to:
 
 Checkpoints are saved every 50 000 steps to `checkpoints/`. The best model (by mean eval reward) is saved to `models/best/best_model.zip`.
 
-**Expected convergence**: the agent typically starts finding the door reliably around 300 000–500 000 steps, depending on obstacle layouts and door timing. Watch `ep_rew_mean` in TensorBoard.
+**Expected convergence**: cold-start PPO typically reaches reliable door-finding around 300 000–500 000 steps. A BC warm start should reach the same point noticeably faster. Watch `ep_rew_mean` in TensorBoard.
 
 ---
 
@@ -153,6 +177,68 @@ No additional packages are needed — `curses` is Python stdlib.
 
 ---
 
+## Imitation Learning Pretraining
+
+Cold-start PPO exploration is slow because Door 13 is far from the Enigma start. Recording a few successful manual runs and pretraining the policy via **behavioural cloning (BC)** gives it a warm start; PPO then fine-tunes toward a generalisable policy that adapts to randomised obstacles and door timing.
+
+The simulator does **not** need to be running during the pretraining step.
+
+### 1 — Record demos with `record_demo.py`
+
+`record_demo.py` is a recording TUI that drives the robot using exactly the RL action set (so there is no remapping when the demos are consumed by the trainer). Start the simulator at real-time speed first:
+
+```bash
+cargo run --release -p simulator -- 1
+```
+
+Then in `agents/`:
+
+```bash
+uv run record_demo.py
+# optional flags:
+uv run record_demo.py --host 127.0.0.1 --port 9999 --demos-dir demos
+```
+
+**Key bindings** (match `roomba_env.py` action indices exactly):
+
+| Key | RL action | Command |
+|-----|-----------|---------|
+| W / ↑ | 0 | `move 30` — forward 30 cm |
+| S / ↓ | 1 | `move -15` — backward 15 cm |
+| A / ← | 2 | `turn 45` — left 45° |
+| D / → | 3 | `turn -45` — right 45° |
+| Q | 4 | `turn 90` — left 90° |
+| Space | — | `stop` (not recorded) |
+| ESC / X | — | Quit and save |
+
+On a successful escape the demo is saved automatically to `demos/demo_<timestamp>.npz`. If you quit without escaping you are prompted whether to save the partial run (partial demos are still useful for learning early navigation).
+
+Each `.npz` file contains two arrays:
+- `obs` — shape `(N, 13)` float32 — the observation before each action
+- `actions` — shape `(N,)` int64 — the corresponding action index
+
+### 2 — Pretrain with `pretrain.py`
+
+```bash
+uv run pretrain.py
+# optional flags:
+uv run pretrain.py --demos-dir demos/ --epochs 50 --batch-size 64 --lr 1e-3 --out models/pretrained
+```
+
+Loads every `demo_*.npz` in `--demos-dir`, trains the PPO policy network with cross-entropy loss for the specified number of epochs, and saves `models/pretrained.zip`.
+
+Expect loss to decrease steadily over epochs. If it plateaus early, record more diverse demos or increase `--epochs`.
+
+### 3 — Resume RL from the pretrained policy
+
+```bash
+uv run train.py --resume models/pretrained.zip --timesteps 1000000
+```
+
+The `--resume` flag loads the BC-pretrained weights into the PPO model before RL begins. The policy already knows a reasonable path to Door 13; PPO then improves generalisation across varied obstacle layouts and door timing.
+
+---
+
 ## Observation and Action Reference
 
 ### Observation space — `Box(13,)` float32
@@ -186,8 +272,8 @@ No absolute x, y position is given; the agent must navigate by relative sensors 
 | Time penalty | −0.002 per step |
 | Bump | −0.05 |
 | At closed door (dist < 1500 mm) | −0.01 |
-| Escape (crossed Door 17 while open) | +10.0 |
-| Timeout (500 steps) | 0 (episode ends) |
+| Escape (crossed Door 13 by ≥ 1 m while open) | +10.0 |
+| Timeout (1000 steps) | 0 (episode ends) |
 
 ---
 
