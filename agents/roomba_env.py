@@ -8,6 +8,7 @@ The simulator must be running before instantiating this env:
 import re
 import socket
 import time
+from collections import deque
 
 import gymnasium as gym
 import numpy as np
@@ -64,6 +65,8 @@ class RoombaEnv(gym.Env):
         self._sock: socket.socket | None = None
         self._step_count = 0
         self._prev_dist = MAX_DIST
+        self._current_obs = None
+        self._action_history = deque(maxlen=4)
 
         obs_low = np.zeros(13, dtype=np.float32)
         obs_high = np.ones(13, dtype=np.float32)
@@ -169,16 +172,56 @@ class RoombaEnv(gym.Env):
         self._cmd(f"speed {TRAINING_SPEED}")
         self._step_count = 0
         obs, dist, _, _ = self._observe()
+        self._current_obs = obs
+        self._action_history.clear()
         self._prev_dist = dist
         return obs, {}
 
     def step(self, action: int):
+        original_action = action
+        override_msg = None
+
+        # Rule 1: Bumper active & trying to move forward (action 0) or turn in place
+        if self._current_obs is not None and self._current_obs[12] > 0.5:
+            if action != 1:
+                action = 1  # Force backup (move -15)
+                override_msg = "Env override (bumper active): forcing backup (move -15)"
+
+        # Rule 2: Front proximity safety
+        elif self._current_obs is not None:
+            front_dist_cm = self._current_obs[0] * 500.0
+            if front_dist_cm < 40.0 and action == 0:
+                left_dist_cm = self._current_obs[2] * 500.0
+                right_dist_cm = self._current_obs[6] * 500.0
+                if left_dist_cm >= right_dist_cm:
+                    action = 2  # turn left (turn 45)
+                    override_msg = f"Env override (front close: {front_dist_cm:.1f} cm): forcing turn left (turn 45)"
+                else:
+                    action = 3  # turn right (turn -45)
+                    override_msg = f"Env override (front close: {front_dist_cm:.1f} cm): forcing turn right (turn -45)"
+
+        # Rule 3: Oscillation prevention
+        if override_msg is None:
+            self._action_history.append(action)
+            if len(self._action_history) >= 4:
+                last_four = list(self._action_history)[-4:]
+                if (last_four == [2, 3, 2, 3] or last_four == [3, 2, 3, 2]) and action in [2, 3]:
+                    action = 4  # force turn 90 (Left 90)
+                    self._action_history.append(action)
+                    override_msg = "Env override (oscillation loop): forcing turn 90 to break cycle"
+        else:
+            self._action_history.append(action)
+
+        if override_msg:
+            print(f"[{self._step_count}] {override_msg}")
+
         cmd, _ = ACTIONS[action]
         self._cmd(cmd)
         # Brief sleep so the command has time to execute before we sample sensors
         time.sleep(0.05)
 
         obs, dist, door_open, escaped = self._observe()
+        self._current_obs = obs
         self._step_count += 1
 
         # Reward
