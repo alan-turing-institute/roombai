@@ -76,4 +76,4 @@ At the end of the run:
 
 <!-- Each competitor defines their own strategy here. -->
  
- Explore aggressively the room. Everytime you bump into something use the camera to pick the best new direction.
+ You need to be very fast because we don't have much time. Start and move the roomba in front of you until you bump into something. At that point rotate of 90 degrees and pick the direction that will allow you either to move toward the door or to proceed further. Continue like this without spending time thinking too much about it.
