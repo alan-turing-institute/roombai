@@ -299,3 +299,39 @@ python train.py --resume checkpoints/rl_model_500000_steps.zip --timesteps 50000
 - **Continuous actions**: switch to SAC with a `Box` action space (forward velocity, turn rate) for smoother motion.
 - **Multi-room curriculum**: train first with only Enigma obstacles, then progressively expose the full floor plan.
 - **Human avoidance**: run the simulator with `--humans` and extend the observation with the nearest human bearing and distance.
+
+
+## PPO - what the agent learns
+
+PPO trains a **two-layer MLP** (128 × 128 hidden units) that maps the 13-float observation to a probability distribution over the 5 discrete actions. At each step it samples an action, receives a reward, and updates the network weights to increase the likelihood of high-reward trajectories. Over roughly 300 000–500 000 steps the policy converges from random exploration to a reliable Door-13-seeking strategy.
+
+### What it optimises for
+
+| Signal | Reward |
+|--------|--------|
+| Getting closer to Door 13 | +2 × Δdist / 10 000 mm per step |
+| Escaping through Door 13 | +10 (sparse goal) |
+| Time penalty | −0.002 per step (incentivises speed) |
+| Bumper hit | −0.05 |
+| Waiting at a closed door (dist < 1 500 mm) | −0.01 |
+
+The policy receives no absolute position — it must learn to navigate using only relative sensor signals. In practice this forces it to develop compass-like heading use (obs[10–11]) and distance-seeking behaviour (obs[8]).
+
+### Sim-to-real translation
+
+| Observation | Simulator source | Real Roomba equivalent | Status |
+|---|---|---|---|
+| Lidar [0–7] — 8 rays (cm) | Raycast engine | None — no lidar on the robot | **Gap** |
+| Target distance [8] | Game state | None — no localisation system | **Gap** |
+| Door open [9] | Game state | Camera required | **Gap** |
+| sin/cos heading [10–11] | Simulator pose | Encoder odometry (`sense`, OI IDs 43–44) | Achievable |
+| Bumpers [12] | `bumps` command | `bumps` command (identical) | **Direct** |
+
+The three critical gaps:
+
+- **Lidar**: The iRobot Create 2 has 7 light-bump IR sensors (`LIGHTBUMP_*`, OI packet IDs 45–51) that detect nearby objects, but they return binary presence/absence rather than a continuous distance. They could substitute for the 8-float lidar if the policy were retrained or fine-tuned on binary proximity signals.
+- **Target distance**: Requires camera-based estimation or a localisation anchor (UWB tag, AprilTag, etc.). The onboard `rpicam-still` camera is the natural source but needs a small distance estimator model or visual heuristic.
+- **Door state**: A binary open/closed classifier on camera frames is sufficient.
+
+**The trained policy cannot run directly on the real robot in its current form.** It can serve as a strong starting point: adapt the observation (7 LIGHTBUMP booleans → obs[0–6], camera distance → obs[8], camera door classifier → obs[9]), then fine-tune on a small number of real-robot rollouts. The MLP is lightweight enough that even a few dozen real episodes should realign the weights to the adapted sensor modalities.
+
