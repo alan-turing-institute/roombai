@@ -4,10 +4,12 @@ Dead-reckoning real-robot agent for RoombaI.
 Runs a trained PPO policy on the real Roomba without a camera by computing
 observations analytically from a known start position + accumulated movement.
 
-Observations that cannot be measured (lidar [0-7]) are zeroed.
-Door state (obs[9]) is hardcoded to open (1.0) — assume the door is open.
-Distance (obs[8]) and heading (obs[10-11]) are derived from dead reckoning.
-Bumpers (obs[12]) are read from the pilot via the 'bumps' command.
+Lidar (obs[0-7]): approximate wall distances computed by ray-casting against
+  the static wall map (map_walls.py). Dynamic obstacles and humans are not
+  included — rays will read as max-range for those directions.
+Distance (obs[8]) and heading (obs[10-11]): derived from dead reckoning.
+Door state (obs[9]): hardcoded to open (1.0) — assume the door is open.
+Bumpers (obs[12]): read from the pilot via the 'bumps' command.
 
 Usage:
     cd agents
@@ -24,6 +26,8 @@ import time
 import numpy as np
 from stable_baselines3 import PPO
 
+from map_walls import WALLS
+
 # ---------------------------------------------------------------------------
 # Map constants (derived from simulator/src/map_data.rs)
 # pdf_pt(x, y) expands to (x*36, y*36) millimetres
@@ -36,7 +40,8 @@ START_Y_MM = 27_900.0           # pdf_pt(1520, 775).y
 DOOR13_X_MM = (983.95 + 1031.84) / 2 * 36   # ≈ 36 284 mm
 DOOR13_Y_MM = 618.48 * 36                    # ≈ 22 265 mm
 
-MAX_DIST_MM = 60_000.0
+MAX_DIST_MM  = 60_000.0
+MAX_LIDAR_MM = 50_000.0   # 500 cm — matches MAX_LIDAR_CM in roomba_env.py
 
 # ---------------------------------------------------------------------------
 # Actions — must match roomba_env.py ACTIONS exactly
@@ -58,6 +63,43 @@ ACTION_EFFECTS = [
     ("turn",  -45.0),    # 3: right 45°
     ("turn",   90.0),    # 4: left 90°
 ]
+
+
+# ---------------------------------------------------------------------------
+# Map-based lidar approximation (walls only — obstacles/humans excluded)
+# ---------------------------------------------------------------------------
+
+def _ray_segment_dist(ox, oy, dx, dy, x1, y1, x2, y2):
+    """Return distance along ray (ox,oy)+t*(dx,dy) to segment, or None."""
+    vx, vy = x2 - x1, y2 - y1
+    denom = dx * vy - dy * vx
+    if abs(denom) < 1e-6:
+        return None
+    t = ((x1 - ox) * vy - (y1 - oy) * vx) / denom
+    u = ((x1 - ox) * dy - (y1 - oy) * dx) / denom
+    if t >= 0.0 and 0.0 <= u <= 1.0:
+        return t
+    return None
+
+
+def _cast_ray(x, y, angle_rad):
+    dx, dy = math.cos(angle_rad), math.sin(angle_rad)
+    min_t = MAX_LIDAR_MM
+    for (x1, y1), (x2, y2) in WALLS:
+        t = _ray_segment_dist(x, y, dx, dy, x1, y1, x2, y2)
+        if t is not None and t < min_t:
+            min_t = t
+    return min_t
+
+
+def compute_lidar(tracker) -> np.ndarray:
+    """Approximate 8-ray lidar from dead-reckoned pose against static wall map."""
+    angles_deg = [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0]
+    result = np.empty(8, dtype=np.float32)
+    for i, deg in enumerate(angles_deg):
+        dist = _cast_ray(tracker.x, tracker.y, tracker.heading + math.radians(deg))
+        result[i] = min(dist / MAX_LIDAR_MM, 1.0)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +170,9 @@ def cmd(sock: socket.socket, command: str) -> str:
 def get_obs(tracker: DeadReckoningTracker, sock: socket.socket) -> np.ndarray:
     obs = np.zeros(13, dtype=np.float32)
 
-    # obs[0-7]: lidar — no hardware equivalent, leave as zero
+    # obs[0-7]: approximate wall distances via map-based ray cast
+    obs[0:8] = compute_lidar(tracker)
+
     # obs[8-11]: dead reckoning
     dist_n, sin_h, cos_h = tracker.obs_fields()
     obs[8]  = dist_n

@@ -324,13 +324,13 @@ The policy receives no absolute position — it must learn to navigate using onl
 
 | Observation | Simulator source | Real Roomba equivalent | Status |
 |---|---|---|---|
-| Lidar [0–7] — 8 rays (cm) | Raycast engine | None — no lidar on the robot | **Gap (zeroed)** |
-| Target distance [8] | Game state | Dead reckoning from known start + encoder odometry | **Solved** |
+| Lidar [0–7] — 8 rays | Raycast engine | Map-based ray cast from dead-reckoned pose | **Solved (walls only)** |
+| Target distance [8] | Game state | Dead reckoning from known start position | **Solved** |
 | Door open [9] | Game state | Hardcoded to open (1.0) — door assumed passable | **Approximated** |
 | sin/cos heading [10–11] | Simulator pose | Dead reckoning (accumulated turn commands) | **Solved** |
 | Bumpers [12] | `bumps` command | `bumps` command (identical) | **Direct** |
 
-`run_agent_real.py` implements the solved/approximated rows: it tracks (x, y, heading) by accumulating every `move`/`turn` command from a known start position (Enigma room spawn, facing right), then computes distance to Door 13 analytically. Lidar rays are zeroed.
+`run_agent_real.py` computes all non-bumper observations analytically: (x, y, heading) are tracked from the known Enigma room spawn position by accumulating every `move`/`turn` command. Distance to Door 13 and the 8 lidar ray distances are then derived from that pose against the static wall map (`map_walls.py`, generated from `simulator/src/map_data.rs`).
 
-**Remaining gap — lidar [0–7]:** The policy trained with 8 continuous-distance rays but receives all zeros on the real robot. In practice the bumper signal (obs[12]) partially compensates — the policy has learned to react to bumper hits — but it will not anticipate walls the way it does in simulation. The iRobot Create 2 has 7 light-bump IR sensors (`LIGHTBUMP_*`, OI packet IDs 45–51) that return binary proximity rather than continuous distance. Substituting these (obs[0–6] = LIGHTBUMP booleans) and fine-tuning for a small number of real episodes would close this gap.
+**Remaining approximation — lidar:** Dynamic obstacles and humans are not in the static map, so lidar rays in those directions read as max-range. On the real robot this means the policy may not anticipate a person or chair that the simulator would have detected. The iRobot Roomba 770's bumper will still trigger (obs[12]) as a fallback, which the policy is also trained to respond to.
 
