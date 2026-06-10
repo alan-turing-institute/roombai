@@ -352,8 +352,7 @@ def _hailo_infer(name: str, img_bgr: np.ndarray) -> dict[str, np.ndarray] | None
         inp     = np.expand_dims(rgb, 0).astype(np.uint8)
         with m["ng"].activate(m["params"]):
             with InferVStreams(m["ng"], m["in_p"], m["out_p"]) as pipe:
-                with pipe.async_infer({m["in_name"]: inp}) as job:
-                    return job.get()
+                return pipe.infer({m["in_name"]: inp})
     except Exception as e:
         print(f"[vision] {name} infer error: {e}")
         return None
