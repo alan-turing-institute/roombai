@@ -74,6 +74,99 @@ At the end of the run:
 
 ## Escape Strategy
 
-<!-- Each competitor defines their own strategy here. -->
- 
- Explore aggressively the room. Everytime you bump into something use the camera to pick the best new direction.
+**Objective:** reach the door as fast as possible. The overhead camera gives full room visibility — use it to navigate directly rather than exploring blindly.
+
+### Roomba dimensions
+- Diameter: ~34 cm, moves at 20 cm/s, turns at 60°/s
+- A 200 cm move takes 10 s. A 90° turn takes 1.5 s. Minimise turns, maximise straight-line distance per move.
+
+---
+
+### Core decision loop
+
+At every decision point:
+
+1. **Capture frame**
+   ```bash
+   source ./scripts/capture_frame.sh
+   ```
+
+2. **Analyse the overhead image** — identify:
+   - Roomba position (centre) and heading (bump strip = front)
+   - Door: which wall, approximate pixel position
+   - Obstacles between Roomba and door
+   - Angle delta and distance remaining to door
+
+3. **Increment decision counter**
+   ```bash
+   sed -i "s/^DECISIONS=.*/DECISIONS=$(( $(grep DECISIONS /tmp/run_state.env | cut -d= -f2) + 1 ))/" /tmp/run_state.env
+   ```
+
+4. **Narrate via TTS**
+   ```bash
+   echo "<decision summary>" >> /tmp/speak_queue.txt
+   ```
+
+5. **Execute command** (see phases below), then **increment tool call counter**
+   ```bash
+   sed -i "s/^TOOL_CALLS=.*/TOOL_CALLS=$(( $(grep TOOL_CALLS /tmp/run_state.env | cut -d= -f2) + 1 ))/" /tmp/run_state.env
+   ```
+
+---
+
+### Phase 1 — Orient (target < 30 s)
+
+- Capture first frame; locate door and estimate Roomba heading
+- Compute angle delta to face the door
+- Issue `turn <deg>` to align (+CCW / −CW)
+
+### Phase 2 — Drive to door (bulk of run)
+
+Use long moves. Only shorten when close.
+
+| Distance to door | Command |
+|---|---|
+| > 150 cm, clear path | `./roomba_pilot/target/debug/pilot send "move 200"` |
+| 60 – 150 cm | `./roomba_pilot/target/debug/pilot send "move 80"` |
+| < 60 cm | `./roomba_pilot/target/debug/pilot send "move 40"` |
+
+After each move: capture frame, check heading drift. If drift > 15°, issue a correction `turn` before the next move. If an obstacle appears, compute the smallest angle to skirt around it (one-robot-width detour), turn, move past it, then turn back toward the door.
+
+**Never issue a move < 40 cm unless within 60 cm of the door.**
+
+### Phase 3 — Thread the door (last ~1 m)
+
+- Shorten moves to 80 cm then 40 cm
+- Ensure Roomba is centred on the opening (34 cm robot, ~80 cm door — ~23 cm margin each side)
+- Once the front crosses the threshold, issue `move 60` to fully clear
+
+---
+
+### Bump recovery
+
+If bumpers fire mid-move:
+
+```bash
+./roomba_pilot/target/debug/pilot send "move -20"   # back off
+source ./scripts/capture_frame.sh                    # re-assess from image
+```
+
+- Left bump only → `turn -45` (turn right)
+- Right bump only → `turn 45` (turn left)
+- Both bumps → turn 90° toward door based on camera reading
+
+---
+
+### Completion
+
+```bash
+echo "Escaped! Run complete." >> /tmp/speak_queue.txt
+./scripts/finish_run.sh escaped
+```
+
+If time expires before escape:
+
+```bash
+./roomba_pilot/target/debug/pilot send "stop"
+./scripts/finish_run.sh dnf
+```
