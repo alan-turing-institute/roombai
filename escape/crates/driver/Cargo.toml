@@ -1,0 +1,15 @@
+[package]
+name = "driver"
+version = "0.1.0"
+edition = "2021"
+
+# Continuous control + sensing for the escape stack (SPEC §4.1). Owns the serial
+# port and the 20 Hz control loop behind the `RobotIo` trait. Reuses
+# `roomba_pilot`'s pure OI protocol/sensor codecs (wire format only — never the
+# blocking `Robot` wrapper); all control, watchdog, reflex, and odometry logic
+# is new code here.
+
+[dependencies]
+escape-core = { path = "../core" }
+roomba_pilot = { path = "../../../roomba_pilot" }
+serialport = "4.7"

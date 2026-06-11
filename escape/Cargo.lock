@@ -36,6 +36,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "brain"
+version = "0.1.0"
+dependencies = [
+ "ctrlc",
+ "driver",
+ "escape-core",
+ "image",
+ "planner",
+ "serde_json",
+ "vision",
+]
+
+[[package]]
 name = "bytemuck"
 version = "1.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -115,6 +128,15 @@ dependencies = [
  "block2",
  "libc",
  "objc2",
+]
+
+[[package]]
+name = "driver"
+version = "0.1.0"
+dependencies = [
+ "escape-core",
+ "roomba_pilot",
+ "serialport",
 ]
 
 [[package]]

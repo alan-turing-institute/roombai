@@ -1,0 +1,21 @@
+[package]
+name = "brain"
+version = "0.1.0"
+edition = "2021"
+
+# The runtime orchestrator (SPEC §3.2 `brain`). Its first behaviour is `wander`:
+# camera → vision → planner → driver, with reflex recovery. More modes
+# (record, calibration-capture, full escape) grow here later.
+
+[[bin]]
+name = "wander"
+path = "src/main.rs"
+
+[dependencies]
+escape-core = { path = "../core" }
+driver = { path = "../driver" }
+vision = { path = "../vision" }
+planner = { path = "../planner" }
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+serde_json = "1"
+ctrlc = "3"
