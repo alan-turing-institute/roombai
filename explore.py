@@ -972,17 +972,23 @@ def mover_thread():
             # Door detection bonus: strongly prefer headings where door is visible.
             # Door is always open — any detection is a valid approach target.
             door_state = state_get("last_door") or {}
-            if door_state.get("door_visible") and door_state.get("confidence", 0) >= DOOR_CONFIRM_MIN_CONF:
+            door_conf  = door_state.get("confidence", 0) if door_state.get("door_visible") else 0
+            if door_conf >= DOOR_CONFIRM_MIN_CONF:
                 d_dist = door_state.get("door_distance_cm") or 9999
                 log(
                     f"[MOVER] SCAN: door at ~{odom.heading:.0f}° "
-                    f"dist≈{d_dist:.0f}cm conf={door_state.get('confidence', 0):.2f}"
+                    f"dist≈{d_dist:.0f}cm conf={door_conf:.2f}"
                 )
                 score += 5.0
 
             if score > best_score:
                 best_score = score
                 best_heading = odom.heading
+
+            # Early-exit: door found with strong confidence — no need to keep scanning.
+            if door_conf >= DOOR_FASTTRACK_CONF:
+                log(f"[MOVER] SCAN: high-conf door at {odom.heading:.0f}° — stopping scan early")
+                break
 
             if not use_rock:
                 continue   # fast_depth already gave open_space for this heading
