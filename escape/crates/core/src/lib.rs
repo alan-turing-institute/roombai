@@ -36,10 +36,13 @@ pub struct Pose2 {
 
 /// One bearing's clearance.
 ///
-/// `clearance` units are deliberately abstract: in v1 it is an image-space
-/// proxy (fraction of frame height that is floor before the first obstacle);
-/// once the IPM calibration lands it becomes ground distance. The planner only
-/// relies on "larger = more room", so it is unchanged by that upgrade.
+/// `clearance` units are deliberately abstract: in v1 it is a 0..=1 drivability
+/// derived from image-space floor extent against the small-room horizon (peaks
+/// when floor reaches the horizon = a clear path; falls off when the boundary is
+/// below it = a near obstacle, or above it = floor-coloured obstacle misread as
+/// floor). Once the IPM calibration lands it becomes ground distance. The
+/// planner only relies on "larger = more room", so it is unchanged by that
+/// upgrade.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Ray {
     /// Bearing of this ray, rad (+left / CCW, 0 = straight ahead).

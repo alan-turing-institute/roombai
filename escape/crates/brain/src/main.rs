@@ -43,13 +43,15 @@ struct Opts {
     safe_clearance: f32,
     /// Gate the frame as blocked when chroma spread < this (vision gate).
     block_chroma: f32,
+    /// Expected horizon height (frame fraction) for the navigation cone.
+    horizon: f32,
     record: Option<PathBuf>,
 }
 
 fn usage() -> ! {
     eprintln!(
         "usage: wander [--port /dev/ttyUSB0] [--max-speed MM_S] \
-         [--safe-clearance FRAC] [--block-chroma SPREAD] [--record DIR]"
+         [--safe-clearance FRAC] [--block-chroma SPREAD] [--horizon FRAC] [--record DIR]"
     );
     std::process::exit(2);
 }
@@ -62,6 +64,7 @@ fn parse_args() -> Opts {
         // in sync if the crate defaults change.
         safe_clearance: NavParams::default().safe_clearance,
         block_chroma: GATE_CHROMA_SPREAD,
+        horizon: ImageCal::default().horizon_frac,
         record: None,
     };
     let mut it = std::env::args().skip(1);
@@ -71,6 +74,7 @@ fn parse_args() -> Opts {
             "--max-speed" => o.max_speed = next_num(&mut it),
             "--safe-clearance" => o.safe_clearance = next_num(&mut it) as f32,
             "--block-chroma" => o.block_chroma = next_num(&mut it) as f32,
+            "--horizon" => o.horizon = next_num(&mut it) as f32,
             "--record" => o.record = Some(PathBuf::from(it.next().unwrap_or_else(|| usage()))),
             _ => usage(),
         }
@@ -118,15 +122,15 @@ fn main() {
         let _ = std::fs::create_dir_all(dir);
     }
 
-    let cal = ImageCal::default();
+    let cal = ImageCal { horizon_frac: opts.horizon, ..Default::default() };
     let nav_params =
         NavParams { max_v_mm_s: opts.max_speed, safe_clearance: opts.safe_clearance, ..Default::default() };
     let mut nav = Navigator::new(nav_params);
     let base_params =
         Params { block_chroma_spread_below: Some(opts.block_chroma), ..Default::default() };
     tts::say(&format!(
-        "Safe clearance {:.2}, block chroma {:.1}.",
-        opts.safe_clearance, opts.block_chroma
+        "Safe clearance {:.2}, block chroma {:.1}, horizon {:.2}.",
+        opts.safe_clearance, opts.block_chroma, opts.horizon
     ));
 
     tts::say("Driving.");

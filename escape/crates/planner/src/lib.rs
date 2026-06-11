@@ -20,16 +20,48 @@
 use escape_core::{PolarClearance, Ray, Twist};
 use vision::FreeSpace;
 
-/// Image geometry needed to place columns at bearings. v1 only needs the
-/// horizontal field of view; the Camera Module v3 in its default mode is ~66°.
+/// Image geometry needed to place columns at bearings and read floor extent.
+/// v1 needs the horizontal field of view (Camera Module v3 default ≈ 66°) and a
+/// small-room horizon model (see [`drivability`]).
 #[derive(Debug, Clone, Copy)]
 pub struct ImageCal {
     pub hfov_rad: f32,
+    /// Expected horizon height, as a fraction of frame height from the bottom.
+    /// This robot only runs in small rooms, so the floor meets the far wall
+    /// about halfway up the frame; floor reaching the horizon = a clear path.
+    pub horizon_frac: f32,
+    /// How far the floor boundary may sit *above* the horizon before the column
+    /// is treated as fully blocked. Floor classified above the horizon can't be
+    /// real floor — it's a near, floor-coloured obstacle filling the view — so
+    /// drivability falls from its peak (at the horizon) to zero over this band.
+    pub overshoot_tol: f32,
 }
 
 impl Default for ImageCal {
     fn default() -> Self {
-        ImageCal { hfov_rad: 66.0_f32.to_radians() }
+        ImageCal { hfov_rad: 66.0_f32.to_radians(), horizon_frac: 0.5, overshoot_tol: 0.2 }
+    }
+}
+
+/// Map a column's image-space floor fraction to a drivability clearance (0..=1),
+/// peaked at the horizon.
+///
+/// In a small room the floor meets the far wall about halfway up the frame, so:
+/// - **at the horizon** (`free_frac == horizon_frac`): floor is visible all the
+///   way to the far wall → a clear path → clearance 1.0.
+/// - **below the horizon**: less floor is visible because an obstacle/wall sits
+///   closer than the far wall → clearance ramps 0→1 as the boundary rises to the
+///   horizon.
+/// - **above the horizon**: "floor" extending past the horizon is geometrically
+///   impossible — it's a near, floor-coloured obstacle right in the bumper's
+///   face being misread as floor — so clearance ramps back 1→0 over
+///   `overshoot_tol` and the column is rejected. This is the case where the old
+///   monotonic mapping wrongly read 70–90% "floor" as wide open.
+pub fn drivability(free_frac: f32, horizon_frac: f32, overshoot_tol: f32) -> f32 {
+    if free_frac <= horizon_frac {
+        (free_frac / horizon_frac.max(1e-3)).clamp(0.0, 1.0)
+    } else {
+        (1.0 - (free_frac - horizon_frac) / overshoot_tol.max(1e-3)).clamp(0.0, 1.0)
     }
 }
 
@@ -37,8 +69,8 @@ impl Default for ImageCal {
 ///
 /// Column `i` of `n` is centred at horizontal image fraction `(i+0.5)/n`; its
 /// bearing is `(0.5 - u) * hfov` so the left of the image is +bearing (left /
-/// CCW), matching [`Twist`]'s sign. Clearance is the column's `free_frac`
-/// (image-space proxy) until IPM replaces it with ground distance.
+/// CCW), matching [`Twist`]'s sign. Clearance is the column's [`drivability`] —
+/// floor extent interpreted against the small-room horizon, not raw `free_frac`.
 pub fn freespace_to_polar(fs: &FreeSpace, cal: &ImageCal) -> PolarClearance {
     let n = fs.columns.len();
     let rays = fs
@@ -49,7 +81,7 @@ pub fn freespace_to_polar(fs: &FreeSpace, cal: &ImageCal) -> PolarClearance {
             let u = (i as f32 + 0.5) / n as f32;
             Ray {
                 bearing_rad: (0.5 - u) * cal.hfov_rad,
-                clearance: c.free_frac,
+                clearance: drivability(c.free_frac, cal.horizon_frac, cal.overshoot_tol),
                 confidence: c.confidence,
             }
         })
@@ -225,6 +257,38 @@ mod tests {
                 .map(|&(b, c)| Ray { bearing_rad: b, clearance: c, confidence: 1.0 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn drivability_peaks_at_horizon_and_rejects_overshoot() {
+        let (h, t) = (0.5, 0.2);
+        // Floor reaching the horizon = a clear path to the far wall = max.
+        assert!((drivability(0.5, h, t) - 1.0).abs() < 1e-6);
+        // Floor "extending" well past the horizon is a near obstacle misread as
+        // floor — the case the user flagged — and must be rejected (≈0, well
+        // below any sane drive gate).
+        assert!(drivability(0.7, h, t) < 1e-3);
+        assert!(drivability(0.9, h, t) < 1e-3);
+        // Below the horizon: less visible floor = less room, but still drivable.
+        assert!(drivability(0.3, h, t) < drivability(0.5, h, t));
+        assert!(drivability(0.3, h, t) > 0.0);
+        // A column at the horizon out-clears one that overshoots it.
+        assert!(drivability(0.5, h, t) > drivability(0.65, h, t));
+    }
+
+    #[test]
+    fn polar_uses_horizon_drivability_not_raw_fraction() {
+        // free_frac 0.5 (at horizon) should beat 0.9 (overshoot), the inverse of
+        // the old monotonic mapping where 0.9 looked "most open".
+        let fs = FreeSpace {
+            columns: vec![
+                Column { free_frac: 0.5, confidence: 1.0 },
+                Column { free_frac: 0.9, confidence: 1.0 },
+            ],
+        };
+        let pc = freespace_to_polar(&fs, &ImageCal::default());
+        assert!(pc.rays[0].clearance > pc.rays[1].clearance);
+        assert_eq!(pc.rays[1].clearance, 0.0);
     }
 
     #[test]
