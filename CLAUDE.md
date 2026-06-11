@@ -13,22 +13,22 @@ The task is to escape the room via the door in the picture below as fast as poss
 
 Send commands via: `./roomba_pilot/target/debug/pilot send "<command>"`
 
-| Command | Effect |
-|---|---|
-| `forward <cm/s> <s>` / `back <cm/s> <s>` | Drive straight for a fixed time |
-| `move <cm>` | Drive a signed distance at fixed speed |
-| `spin <deg/s> <s>` | Rotate in place for a time |
-| `turn <deg>` | Rotate a signed angle (+CCW / −CW) at 60°/s |
-| `go <cm/s> <deg/s>` | Raw continuous motion (3 s safety window) |
-| `stop` | Halt wheels |
-| `sense` | Battery, OI mode, bumpers |
-| `bumps` | Bumper + wheel-drop state |
-| `safe` | Enter OI SAFE mode (mode 2) — required for movement |
-| `full` | Enter OI FULL mode (mode 3) |
-| `motors <side> <main> <vac>` | Brushes/vacuum |
-| `dock` | Seek charging dock |
-| `ping` | Health check |
-| `shutdown` | Stop, return to passive, exit daemon |
+| Command                                  | Effect                                              |
+| ---------------------------------------- | --------------------------------------------------- |
+| `forward <cm/s> <s>` / `back <cm/s> <s>` | Drive straight for a fixed time                     |
+| `move <cm>`                              | Drive a signed distance at fixed speed              |
+| `spin <deg/s> <s>`                       | Rotate in place for a time                          |
+| `turn <deg>`                             | Rotate a signed angle (+CCW / −CW) at 60°/s         |
+| `go <cm/s> <deg/s>`                      | Raw continuous motion (3 s safety window)           |
+| `stop`                                   | Halt wheels                                         |
+| `sense`                                  | Battery, OI mode, bumpers                           |
+| `bumps`                                  | Bumper + wheel-drop state                           |
+| `safe`                                   | Enter OI SAFE mode (mode 2) — required for movement |
+| `full`                                   | Enter OI FULL mode (mode 3)                         |
+| `motors <side> <main> <vac>`             | Brushes/vacuum                                      |
+| `dock`                                   | Seek charging dock                                  |
+| `ping`                                   | Health check                                        |
+| `shutdown`                               | Stop, return to passive, exit daemon                |
 
 ---
 
@@ -44,21 +44,25 @@ The run directory and state are already initialised by `run.sh` before Claude st
 State is stored in `/tmp/run_state.env` and shared across all scripts.
 
 At every decision point (captures a timestamped frame):
+
 ```bash
 source ./scripts/capture_frame.sh
 ```
 
 After each `pilot send` command, increment the tool call counter:
+
 ```bash
 sed -i "s/^TOOL_CALLS=.*/TOOL_CALLS=$(( $(grep TOOL_CALLS /tmp/run_state.env | cut -d= -f2) + 1 ))/" /tmp/run_state.env
 ```
 
 After each frame analysis, increment the decision counter:
+
 ```bash
 sed -i "s/^DECISIONS=.*/DECISIONS=$(( $(grep DECISIONS /tmp/run_state.env | cut -d= -f2) + 1 ))/" /tmp/run_state.env
 ```
 
 At the end of the run:
+
 ```bash
 ./scripts/finish_run.sh escaped   # or: ./scripts/finish_run.sh dnf
 ```
@@ -72,9 +76,7 @@ At the end of the run:
 
 ---
 
-## Escape Strategy
-
-<!-- Each competitor defines their own strategy here. -->
+## Escape Strategy — "Drive blind, look only when you hit something, remember where you've been"
 
 Take 4 photos: at starting point, at 90, 180 and 270 degrees. Do this rapidly without analysing them or reasoning.
 Now, look at those four photos. If one shows the door, orient the roomba in that direction. Otherwise, choose the one that shows the clearest open path and orient the roomba in that direction.
@@ -82,5 +84,7 @@ Now, look at those four photos. If one shows the door, orient the roomba in that
 Now move the roomba straight without checking the camera or stopping until you bump into an obstacle. If by mistake you stop the roomba before reaching an obstacle, you should re-start immediately without losing time.
 
 Every time you hit an obstacle, repeat this procedure from the beginning (ignore 180 direction from now on as it's the direction from where you came).
+
+Be careful, the roomba is not well calibrated. When you think you rotated 360 you actually rotated 320. So consider that in every move you make and make corrections.
 
 Try to be as fast and decisive as possible as we only have 10 minutes!
