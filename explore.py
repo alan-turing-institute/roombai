@@ -382,19 +382,53 @@ def capture_frame(path: Path) -> bool:
 
 # ── Strategy file ─────────────────────────────────────────────────────────────
 def _read_strategy():
+    """
+    Apply supervisor strategy overrides.
+
+    Priority rules:
+    - APPROACH mode set by the camera (door detected) cannot be downgraded
+      to EXPLORE by the strategy file unless force_override=true is set.
+      This prevents a stale strategy push from cancelling a live door approach.
+    - If the strategy says APPROACH and provides a door_bearing, the bearing
+      is always applied even when the robot is already in APPROACH — so
+      mid-approach bearing corrections from the supervisor take effect.
+    - force_override=true bypasses all protection (used by supervisor to
+      confirm a false positive and return to exploration).
+    """
     try:
-        if STRATEGY_FILE.exists():
-            data = json.loads(STRATEGY_FILE.read_text())
-            mode = data.get("mode")
-            if mode and mode != state_get("mode"):
-                log(f"[STRATEGY] mode override → {mode}")
-                speak(f"Strategy update. Switching to {mode}.")
-                notes = data.get("notes", "")
-                if notes:
-                    log(f"[STRATEGY] {notes}")
-                state_set(mode=mode)
-                if data.get("door_bearing") is not None:
-                    state_set(door_bearing=float(data["door_bearing"]))
+        if not STRATEGY_FILE.exists():
+            return
+        data = json.loads(STRATEGY_FILE.read_text())
+        mode  = data.get("mode")
+        force = bool(data.get("force_override", False))
+
+        if not mode:
+            return
+
+        current = state_get("mode")
+
+        # Protect APPROACH: a camera-triggered door approach should not be
+        # cancelled by a stale EXPLORE push from the supervisor unless they
+        # explicitly acknowledge it with force_override=true.
+        if current == "APPROACH" and mode == "EXPLORE" and not force:
+            return   # silently ignore — APPROACH stays active
+
+        # Apply bearing update for APPROACH even if mode hasn't changed,
+        # so mid-approach bearing corrections from the supervisor work.
+        if mode == "APPROACH" and data.get("door_bearing") is not None:
+            new_bearing = float(data["door_bearing"])
+            state_set(door_bearing=new_bearing)
+            if current == "APPROACH":
+                log(f"[STRATEGY] APPROACH bearing updated → {new_bearing:.0f}°")
+
+        if mode != current:
+            log(f"[STRATEGY] mode override → {mode}{' (FORCED)' if force else ''}")
+            speak(f"Strategy update. Switching to {mode}.")
+            notes = data.get("notes", "")
+            if notes:
+                log(f"[STRATEGY] {notes}")
+            state_set(mode=mode)
+
     except Exception as e:
         log(f"strategy read error: {e}")
 
