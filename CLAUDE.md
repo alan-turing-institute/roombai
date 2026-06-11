@@ -80,9 +80,9 @@ When asked to escape the room, act as Orchestrator and run the following loop:
 ### Phase 1 — Scout
 Spin 360° in place, capturing a frame every 30° (12 frames total).
 Analyse all frames to find the door:
-- Look for a rectangular gap in the wall, change in flooring, or open space
-- Estimate door bearing relative to current heading (0° = forward)
-- Log: `scout: door_bearing=<deg> confidence=<0-1>`
+- Look for stationary rectangular structures against a background of white lockers, bear in mind moving shapes might move between stationary edges
+- Estaimte door bearing relative to current heading (0° = forward) and estimate confidence
+- Log : `scout: door_bearing=<deg> confidence=<0-1>`
 
 If confidence < 0.5 after a full rotation, rotate another 180° and retry once.
 
@@ -90,17 +90,17 @@ If confidence < 0.5 after a full rotation, rotate another 180° and retry once.
 Tight loop until the door fills >50% of the frame:
 
 1. Turn to align with door bearing: `pilot send "turn <deg>"`
-2. Move forward 30 cm: `pilot send "move 30"`
+2. If confidence > 0.7, move forward 200 cm: `pilot send "move 200"`, else, move forward 120 cm: `pilot send "move 120"`
 3. Capture frame, re-assess door position and bearing
 4. Check bumpers after every move: `pilot send "bumps"`
-   - If bumped: back up 10 cm, turn 30° away from bump side, continue
+   - If bumped: back up 10 cm, capture frame, re-assess door position and bearing, iterate to step 1 of Phase 2 - Navigate
 5. If door is lost: run a 180° mini-scout to reacquire
 
 Narrate each decision: `echo "moving toward door at 45 degrees" >> /tmp/speak_queue.txt`
 
 ### Phase 3 — Confirm escape
-When the door fills the frame:
-- Slow to 20 cm bursts through the doorframe
+When the frame is filled with white lockers
+- Slow to 60 cm bursts through the doorframe
 - Capture a frame on the other side — if the scene is clearly different, escaped
 - Call `./scripts/finish_run.sh escaped`
 
