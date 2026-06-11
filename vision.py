@@ -36,6 +36,13 @@ _DOOR_YOLO_SIZE  = 640
 _REFERENCE_DOOR_PATH = Path(__file__).parent / "reference_door.jpg"
 _reference_door_hist: np.ndarray | None = None   # cached 2D hue-sat histogram
 
+# negative_door.jpg is a frame captured when the robot false-positived on the gap
+# between the back of the door panel and the AV rack ("bins"). Any gap whose
+# colour histogram closely matches this negative reference is rejected.
+_NEGATIVE_DOOR_PATH = Path(__file__).parent / "negative_door.jpg"
+_negative_door_hist: np.ndarray | None = None
+
+
 def _get_reference_door_hist() -> "np.ndarray | None":
     global _reference_door_hist
     if _reference_door_hist is not None:
@@ -60,6 +67,31 @@ def _get_reference_door_hist() -> "np.ndarray | None":
         return None
 
 
+def _get_negative_door_hist() -> "np.ndarray | None":
+    global _negative_door_hist
+    if _negative_door_hist is not None:
+        return _negative_door_hist
+    if not _NEGATIVE_DOOR_PATH.exists():
+        return None
+    try:
+        img = cv2.imread(str(_NEGATIVE_DOOR_PATH))
+        if img is None:
+            return None
+        if img.shape[1] != 640:
+            img = cv2.resize(img, (640, 480))
+        # Use the full gap-width centre strip of the image — represents what the
+        # detector sees through the false gap (white wall + AV rack interior).
+        h, w = img.shape[:2]
+        crop = img[:, w // 4: 3 * w // 4]
+        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+        hist = cv2.calcHist([hsv], [0, 1], None, [18, 8], [0, 180, 0, 256])
+        cv2.normalize(hist, hist, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+        _negative_door_hist = hist
+        return hist
+    except Exception:
+        return None
+
+
 def _reference_door_similarity(img_bgr: np.ndarray, lx: int, rx: int) -> float:
     """
     Compare the hue-saturation histogram of a gap region to the reference door.
@@ -76,6 +108,26 @@ def _reference_door_similarity(img_bgr: np.ndarray, lx: int, rx: int) -> float:
     hist = cv2.calcHist([hsv], [0, 1], None, [18, 8], [0, 180, 0, 256])
     cv2.normalize(hist, hist, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
     dist = cv2.compareHist(ref, hist, cv2.HISTCMP_BHATTACHARYYA)
+    return float(max(0.0, 1.0 - dist))
+
+
+def _negative_door_similarity(img_bgr: np.ndarray, lx: int, rx: int) -> float:
+    """
+    Compare the hue-saturation histogram of a gap region to the negative reference
+    (AV rack false positive). Returns 0–1 (1 = identical to the false positive).
+    Returns 0.0 (won't reject) if no negative reference loaded.
+    """
+    neg = _get_negative_door_hist()
+    if neg is None:
+        return 0.0
+    h, w = img_bgr.shape[:2]
+    gap = img_bgr[:, max(0, lx):min(w, rx)]
+    if gap.size == 0:
+        return 0.0
+    hsv = cv2.cvtColor(gap, cv2.COLOR_BGR2HSV)
+    hist = cv2.calcHist([hsv], [0, 1], None, [18, 8], [0, 180, 0, 256])
+    cv2.normalize(hist, hist, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+    dist = cv2.compareHist(neg, hist, cv2.HISTCMP_BHATTACHARYYA)
     return float(max(0.0, 1.0 - dist))
 
 # ── Camera intrinsics ─────────────────────────────────────────────────────────
@@ -1300,6 +1352,14 @@ def detect_door_cv(
         if ref_sim < 0.20:
             return {**null, "notes": f"rejected: gap dissimilar to reference door (sim={ref_sim:.2f})"}
 
+        # Filter 7: negative reference (AV rack false positive).
+        # negative_door.jpg captures exactly what the detector saw when it mistook
+        # the gap between the door back-face and the AV rack for the real opening.
+        # If the current gap looks more like that than like the real door, reject it.
+        neg_sim = _negative_door_similarity(img_bgr, lx, rx)
+        if neg_sim > 0.55 and neg_sim > ref_sim:
+            return {**null, "notes": f"rejected: gap matches AV rack false positive (neg_sim={neg_sim:.2f} > ref_sim={ref_sim:.2f})"}
+
         pos        = ("left"   if center_x < w / 3
                        else "right" if center_x > 2 * w / 3
                        else "center")
@@ -1312,7 +1372,7 @@ def detect_door_cv(
         confidence = min(1.0, best_score / 500.0 * (0.6 + 0.4 * ref_sim))
         notes = (
             f"gap={gap}px dist≈{door_dist}cm real_w≈{gap_real_cm}cm pos={pos} "
-            f"bright={bright_r:.2f} edge={edge_dens:.2f} ref_sim={ref_sim:.2f}"
+            f"bright={bright_r:.2f} edge={edge_dens:.2f} ref_sim={ref_sim:.2f} neg_sim={neg_sim:.2f}"
         )
         return {
             "door_visible":     True,
