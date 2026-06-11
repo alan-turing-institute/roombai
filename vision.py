@@ -537,16 +537,21 @@ def _fuse_door_detections(cv_door: dict, yolo_doors: list[dict], orig_w: int) ->
 
     if yolo_doors and not cv_door["door_visible"]:
         best = max(yolo_doors, key=lambda d: d["confidence"])
+        # Door is always open.  The passable opening is the gap in the glass wall
+        # next to the door panel — OpenCV will resolve its exact pixel position once
+        # we are close enough.  Don't steer toward the panel center; use coarse
+        # position bearing (door_center_px=None) so we approach the right general
+        # direction without over-steering onto the door leaf.
         return {
             **cv_door,
             "door_visible":   True,
-            "door_open":      False,
+            "door_open":      True,
             "door_position":  best["position"],
-            "door_center_px": best.get("cx"),
+            "door_center_px": None,
             "confidence":     round(best["confidence"] * 0.7, 3),
             "notes": (
                 f"YOLO door panel at {best['position']} "
-                f"(conf={best['confidence']:.2f}); no geometric gap yet"
+                f"(conf={best['confidence']:.2f}); approaching gap beside panel"
             ),
         }
 

@@ -642,11 +642,11 @@ def camera_thread():
                 f"hits={sum(door_history)}/{len(door_history)}"
             )
 
-        # Fast-track: one very high-confidence open-door hit → APPROACH immediately
+        # Fast-track: one very high-confidence door hit → APPROACH immediately
         # without waiting for the sliding window.  Handles cases like frame 47
         # (conf=0.94) where the robot moves away before accumulating 3 hits.
+        # Door is always open — no door_open gate needed.
         if (detected
-                and door.get("door_open")
                 and door.get("confidence", 0) >= DOOR_FASTTRACK_CONF
                 and state_get("mode") not in ("APPROACH", "STOP", "WAIT")):
             if door.get("door_center_px") is not None:
@@ -677,7 +677,7 @@ def camera_thread():
                     state_set(mode="STOP")
                     door_history.clear()
 
-            elif door["door_open"] and mode == "APPROACH":
+            elif mode == "APPROACH":
                 if door.get("door_center_px") is not None:
                     error_px = door["door_center_px"] - 320
                     offset = -error_px * (66.0 / 640.0)
@@ -704,7 +704,7 @@ def camera_thread():
                         )
                         state_set(door_bearing=new_bearing)
 
-            elif door["door_open"] and mode not in ("APPROACH", "STOP", "WAIT"):
+            elif mode not in ("APPROACH", "STOP", "WAIT"):
                 if door.get("door_center_px") is not None:
                     error_px = door["door_center_px"] - 320
                     offset = -error_px * (66.0 / 640.0)
@@ -720,8 +720,8 @@ def camera_thread():
                 state_set(mode="APPROACH", door_bearing=bearing)
                 door_history.clear()
 
-            elif not door["door_open"] and mode == "APPROACH":
-                log(f"[VISION] Door appears closed at ≈{dist:.0f}cm — continuing APPROACH")
+            elif mode == "APPROACH":
+                log(f"[VISION] Door confirmed at ≈{dist:.0f}cm — continuing APPROACH")
 
 
 # ── Movement thread ──────────────────────────────────────────────────────────
@@ -957,16 +957,15 @@ def mover_thread():
                 pass
 
             # Door detection bonus: strongly prefer headings where door is visible.
+            # Door is always open — any detection is a valid approach target.
             door_state = state_get("last_door") or {}
             if door_state.get("door_visible") and door_state.get("confidence", 0) >= DOOR_CONFIRM_MIN_CONF:
-                d_open = door_state.get("door_open", False)
                 d_dist = door_state.get("door_distance_cm") or 9999
                 log(
-                    f"[MOVER] SCAN: door {'open' if d_open else 'closed'} at "
-                    f"~{odom.heading:.0f}° dist≈{d_dist:.0f}cm "
-                    f"conf={door_state.get('confidence', 0):.2f}"
+                    f"[MOVER] SCAN: door at ~{odom.heading:.0f}° "
+                    f"dist≈{d_dist:.0f}cm conf={door_state.get('confidence', 0):.2f}"
                 )
-                score += 5.0 if d_open else 2.0
+                score += 5.0
 
             if score > best_score:
                 best_score = score
