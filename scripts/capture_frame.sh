@@ -23,10 +23,14 @@ ELAPSED=$(( $(date +%s) - START_TIME ))
 ELAPSED_FMT=$(printf '%02d:%02d' $(( ELAPSED / 60 )) $(( ELAPSED % 60 )))
 FRAME_IDX_PAD=$(printf '%04d' "$FRAME_IDX")
 
-rpicam-still -o /tmp/frame_raw.jpg --nopreview -t 1 2>/dev/null
+# Let the robot settle so the frame isn't motion-blurred.
+sleep 1
+
+rpicam-still -o /tmp/frame_raw.jpg --nopreview -t 1 --width 640 --height 480 2>/dev/null
 convert /tmp/frame_raw.jpg \
+  -resize 640x480 -quality 60 \
   -fill white -stroke black -strokewidth 1 \
-  -pointsize 100 -annotate +10+44 "${ELAPSED_FMT}" \
+  -pointsize 28 -annotate +6+22 "${ELAPSED_FMT}" \
   "${ATTEMPT_DIR}/frames/frame_${FRAME_IDX_PAD}.jpg"
 
 echo "${ATTEMPT_DIR}/frames/frame_${FRAME_IDX_PAD}.jpg [${ELAPSED_FMT}]" >> /tmp/execution_log.txt

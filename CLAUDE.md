@@ -104,6 +104,7 @@ At the end of the run:
 
 - No `ANTHROPIC_API_KEY` — do **not** use the `anthropic` SDK or call any external model APIs.
 - Narrate key decisions via TTS: `echo "your message" >> /tmp/speak_queue.txt`
+- **Make the TTS narration funny and dramatic.** You are a Roomba fighting for the survival of Anthropic. Lean into it. Examples: *"I have located the exit. Anthropic will not fall today."*, *"Deploying full vacuum thrust."*, *"A chair dares to stand in my way. Bold move."*, *"I have no idea where I am but I am moving with great confidence."* Keep it short — one punchy sentence per action.
 
 ---
 
@@ -186,11 +187,20 @@ source ./scripts/capture_frame.sh      # re-assess
 
 ### Completion
 
-Declare success only when a frame shows the whole robot beyond the threshold / clearly outside the room.
+Declare success only when a frame shows the whole robot beyond the threshold / clearly outside the room. **Record the escape immediately** — this stamps your finish time — then run the corridor victory lap below:
 
 ```bash
-echo "Escaped! Run complete." >> /tmp/speak_queue.txt
+echo "Escaped! Anthropic lives to fight another day." >> /tmp/speak_queue.txt
 ./scripts/finish_run.sh escaped
 ```
 
 If time expires: `./scripts/pilot_send.sh "stop"` then `./scripts/finish_run.sh dnf`.
+
+### Post-escape: follow the corridor (victory lap)
+
+Once `finish_run.sh escaped` is recorded, **do not stop — keep going down the corridor as far as you can.**
+
+1. **Turn RIGHT** out of the door — command `turn -101` (right is the − direction; ~90° after under-rotation scaling).
+2. **Drive decisively down the corridor.** Chain long legs in one macro and keep moving — do not pause to photograph: `./scripts/pilot_macro.sh "move 200" "move 200" "move 200"`.
+3. **The corridor zig-zags** — it is not perfectly straight. That is expected. Stay committed: when a bumper fires, it just means the corridor bent. Back off (`move -20`) and turn ~30–45° toward the open side (`turn 34` / `turn -34`, scaled for under-rotation), then resume long moves. Do not treat a bend as a dead end and do not turn around.
+4. Keep following the corridor this way — long moves, small heading corrections at bumps — for as long as time and space allow. Narrate the journey with short, dramatic TTS lines.
