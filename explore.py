@@ -751,7 +751,9 @@ def mover_thread():
             # the center blocked since this burst started.  Using the dedicated
             # legs_blocking flag avoids a false negative when YOLO sees an
             # unrelated object (nearest_cm non-None) while legs are the real hazard.
-            if state_get("legs_blocking") and (state_get("blocked") or {}).get("center"):
+            if (state_get("mode") != "APPROACH"
+                    and state_get("legs_blocking")
+                    and (state_get("blocked") or {}).get("center")):
                 send_cmd("stop")
                 log(f"[MOVER] mid-burst stop: legs blocking center after {elapsed:.1f}s")
                 return "blocked_legs", elapsed
@@ -1208,11 +1210,10 @@ def mover_thread():
                 ev, map_fwd, _ = map_obs[0]
                 log(f"[MAP] APPROACH: known '{ev.label}' at {map_fwd:.0f}cm → steering")
                 do_turn(choose_avoid_turn(map_obs))
-            elif blocked.get("center") and (
-                nearest_cm is None or nearest_cm < AVOID_STEER_DIST_CM
-            ):
-                # Block on leg detection (nearest_cm=None) as well as close YOLO objects.
-                # Chair legs must not be driven through even in approach mode.
+            elif blocked.get("center") and nearest_cm is not None and nearest_cm < AVOID_STEER_DIST_CM:
+                # Only steer for YOLO obstacles with a known metric distance.
+                # Leg detections (nearest_cm=None) are ignored in APPROACH — there
+                # is usually floor clearance past seated people's legs.
                 deg = choose_avoid_turn()
                 log(
                     f"[MOVER] APPROACH: center blocked "
