@@ -921,8 +921,12 @@ def mover_thread():
                 break
 
             do_turn(-45)
-            # do_turn() clears _rest_photo_ready; wait until the camera thread
-            # delivers a fresh photo taken while the robot is fully stopped.
+            # do_turn() clears _rest_photo_ready, but the camera thread runs every
+            # 0.5 s and may set it again from a photo taken mid-turn (translational
+            # baseline_cm ≈ 0 during a pure rotation).  Clear it once more now that
+            # the robot has fully stopped, so _scan_wait blocks on a genuinely
+            # post-turn stationary frame.
+            _rest_photo_ready.clear()
             if _scan_wait():
                 break
 
