@@ -135,11 +135,12 @@ The exit is:
 **Step 1 — orient (< 30 s total)**
 
 ```bash
-./scripts/pilot_send.sh "safe"
 sleep 1
 source ./scripts/capture_frame.sh
 ./scripts/mark_decision.sh
 ```
+
+(`safe` mode is already set by `run.sh` before Claude starts — do not re-send it.)
 
 Analyse the frame in under 10 seconds:
 - If the frame is a close-up of a wall: `move -30`, `turn 180`, capture again (this is still part of step 1, not an extra capture).
@@ -148,22 +149,22 @@ Analyse the frame in under 10 seconds:
 
 **Step 2 — drive to the exit (no more captures)**
 
-Issue one turn to align, then chain all moves to the threshold in a single macro. **Use large distances — err on the side of too far, not too short.** The bumpers will stop you if you hit something; a move that falls short just wastes time.
+Issue one turn to align, then chain all moves to the threshold in a single macro. **Use `forward 30 <s>` instead of `move` for straight-line travel — it runs at 30 cm/s instead of 20 cm/s, covering the same distance 50% faster.** The bumpers will stop you if you hit something.
 
 ```bash
-./scripts/pilot_macro.sh "turn <deg>" "move 200" "move 200" "move 200"
+./scripts/pilot_macro.sh "turn <deg>" "forward 30 7" "forward 30 7" "forward 30 3"
 ```
 
-Two or three `move 200` commands will cross any normal room. Do not use short moves like `move 50` or `move 80` mid-run — those are only for the final doorway thread. **If you find yourself about to issue a move shorter than 150 cm and no bumper has fired, make it longer.**
+Each `forward 30 7` covers ~210 cm in 7 s. Two of them cross any normal room. The final `forward 30 3` (~90 cm) threads through the gap and clears the rear. Do not use short moves mid-run — if no bumper has fired, keep the distances long.
 
 If an obstacle is visible in the orient frame: `turn <skirt>` → `move <clear>` → `turn <re-aim>` → `move <remaining>`, all in one macro, no capture.
 
 **Step 3 — clear the exit**
 
-Once the front of the robot crosses the threshold, issue one more `move 80` to clear the rear. Then:
+Once you have driven the estimated distance to the door plus an extra 80 cm (to clear the rear of the robot), declare success immediately — **do not wait for a photo to confirm**. If the robot is near the lockers and has passed through the gap between the wooden board and the glass partition, it has escaped.
 
 ```bash
-echo "Escaped!" >> /tmp/speak_queue.txt
+echo "I have escaped. Anthropic is saved. You're welcome, humanity." >> /tmp/speak_queue.txt
 ./scripts/finish_run.sh escaped
 ```
 
@@ -174,7 +175,7 @@ echo "Escaped!" >> /tmp/speak_queue.txt
 **Single bumper hit — no capture needed, turn immediately:**
 
 ```bash
-./scripts/pilot_send.sh "move -20"
+./scripts/pilot_send.sh "back 20 1"
 # Left bump:  ./scripts/pilot_send.sh "turn -45"
 # Right bump: ./scripts/pilot_send.sh "turn 45"
 # then resume macro toward exit
