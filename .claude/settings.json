@@ -1,5 +1,17 @@
 {
   "permissions": {
     "defaultMode": "bypassPermissions"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/capture_model.sh"
+          }
+        ]
+      }
+    ]
   }
 }
