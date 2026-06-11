@@ -683,11 +683,23 @@ def camera_thread():
                     offset = {"left": 25, "center": 0, "right": -25}.get(pos, 0)
                 if abs(offset) > 1:
                     new_bearing = (odom.heading + offset) % 360
-                    log(
-                        f"[VISION] APPROACH: pixel-steer {offset:+.1f}° "
-                        f"(px={door.get('door_center_px')}) → bearing {new_bearing:.0f}°"
-                    )
-                    state_set(door_bearing=new_bearing)
+                    # Reject bearing updates that are >90° from current — likely
+                    # a false positive or scan artefact pointing the wrong way.
+                    prev_b = state_get("door_bearing")
+                    if prev_b is not None:
+                        diff = abs((new_bearing - prev_b + 180) % 360 - 180)
+                        if diff > 90:
+                            log(
+                                f"[VISION] APPROACH: bearing update rejected "
+                                f"({new_bearing:.0f}° vs current {prev_b:.0f}°, diff={diff:.0f}°)"
+                            )
+                            new_bearing = None
+                    if new_bearing is not None:
+                        log(
+                            f"[VISION] APPROACH: pixel-steer {offset:+.1f}° "
+                            f"(px={door.get('door_center_px')}) → bearing {new_bearing:.0f}°"
+                        )
+                        state_set(door_bearing=new_bearing)
 
             elif door["door_open"] and mode not in ("APPROACH", "STOP", "WAIT"):
                 if door.get("door_center_px") is not None:
@@ -1225,24 +1237,41 @@ def mover_thread():
                     and last_door_now.get("confidence", 0) >= DOOR_CONFIRM_MIN_CONF
                 )
 
-                if door_currently_visible:
-                    # Door is in view — steer around the obstacle and keep pushing
-                    # forward rather than backing away from the door.
+                last_door_dist = (state_get("last_door") or {}).get("door_distance_cm") or 9999
+                door_close = last_door_dist < 250
+
+                if door_currently_visible or door_close:
+                    # Door visible or recently close — steer around and keep bearing.
+                    # A full 360° scan here risks detecting the door from the wrong
+                    # angle and flipping the bearing 180°.
                     deg = choose_avoid_turn()
-                    log(f"[MOVER] APPROACH bump: door visible — steer {deg:+.0f}° and push")
-                    pass  # speak removed
+                    log(
+                        f"[MOVER] APPROACH bump: {'door visible' if door_currently_visible else f'door close ({last_door_dist:.0f}cm)'}"
+                        f" — steer {deg:+.0f}° and push"
+                    )
                     do_turn(deg)
                 else:
                     prev_bearing = state_get("door_bearing")
                     do_bump_scan(bumper=status.startswith("bump"))
 
-                    # Re-orient toward bearing (updated if door found in scan, else previous).
-                    cur_bearing = state_get("door_bearing") or prev_bearing
+                    # Reject scan bearing if it's >90° from previous — wrong direction.
+                    cur_bearing = state_get("door_bearing")
+                    if cur_bearing is not None and prev_bearing is not None:
+                        diff = abs((cur_bearing - prev_bearing + 180) % 360 - 180)
+                        if diff > 90:
+                            log(
+                                f"[MOVER] APPROACH: scan bearing {cur_bearing:.0f}° rejected "
+                                f"(diff={diff:.0f}° from prev {prev_bearing:.0f}°) — keeping previous"
+                            )
+                            state_set(door_bearing=prev_bearing)
+                            cur_bearing = prev_bearing
+
+                    cur_bearing = cur_bearing or prev_bearing
                     if cur_bearing is not None and state_get("mode") == "APPROACH":
                         delta = (cur_bearing - odom.heading + 180) % 360 - 180
                         if abs(delta) > 10:
                             do_turn(delta)
-                        _approach_turn_deg = 0.0   # scan gave fresh heading reference
+                        _approach_turn_deg = 0.0
 
         # ── EXPLORE mode ──────────────────────────────────────────────────
         else:
