@@ -68,9 +68,9 @@ SCAN_ROCK_CM    = 20    # forward distance (cm) rocked at each scan heading for 
 SCAN_WAIT_S     = 2.0   # seconds to wait at each scan heading for a fresh frame
                          # = FRAME_INTERVAL + capture(0.8s) + analysis(0.5s) + margin
 
-DOOR_CONFIRM_FRAMES = 3    # positives needed to trigger approach
+DOOR_CONFIRM_FRAMES = 1    # positives needed to trigger approach (first hit = go)
 DOOR_CONFIRM_WINDOW = 7    # sliding window length in frames (~14 s at 2 s/frame)
-DOOR_CONFIRM_MIN_CONF = 0.10   # ignore detections below this confidence
+DOOR_CONFIRM_MIN_CONF = 0.25   # ignore detections below this confidence
 DOOR_FASTTRACK_CONF = 0.75     # single open-door detection above this → APPROACH immediately
 DOOR_SLOW_BURST     = 1.0      # forward burst (s) when door hit in current window
 
