@@ -10,7 +10,10 @@ VOICE=${2:-en}
 touch "$QUEUE"
 echo "[speak_daemon] started, watching $QUEUE" >&2
 
+# hw:0,0 = Jabra USB speaker (card 0). Without -d, espeak-ng defaults to HDMI.
+DEVICE=${3:-hw:0,0}
+
 tail -n 0 -f "$QUEUE" | while IFS= read -r line; do
     [[ -z "$line" ]] && continue
-    espeak-ng -s "$SPEED" -v "$VOICE" -- "$line" 2>/dev/null
+    espeak-ng -s "$SPEED" -v "$VOICE" -d "$DEVICE" -- "$line" 2>/dev/null
 done

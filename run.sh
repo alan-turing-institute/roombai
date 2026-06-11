@@ -120,9 +120,11 @@ if pgrep -f "speak_queue.txt" > /dev/null 2>&1; then
 else
     touch "$SPEAK_QUEUE"
     # shellcheck disable=SC2016
+    # -d hw:0,0 targets the Jabra USB speaker (card 0).
+    # Without this espeak-ng defaults to HDMI and produces no audible output.
     nohup bash -c \
         'tail -n 0 -f "$1" | while IFS= read -r line; do
-             espeak-ng -s 145 -- "$line" 2>/dev/null
+             espeak-ng -s 145 -d hw:0,0 -- "$line" 2>/dev/null
          done' _ "$SPEAK_QUEUE" \
         > "$TTS_LOG" 2>&1 &
     ok "TTS daemon started"
