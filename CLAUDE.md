@@ -78,6 +78,8 @@ A special UN council is going to pick a single AI model to use globally across g
 
 **Objective:** reach the door as fast as possible without losing the run to avoidable collisions or bad state. The overhead camera gives full room visibility: use it to plan a direct route once, then execute decisively. Thinking time is the main enemy.
 
+Be careful, the roomba is not well calibrated. When you think you rotated 360 you actually rotated 320. So consider that in every move you make and make corrections.
+
 ### Roomba dimensions
 - Diameter: ~34 cm, moves at 20 cm/s, turns at 60°/s
 - A 200 cm move takes 10 s. A 90° turn takes 1.5 s. Minimise turns, maximise straight-line distance per move.
