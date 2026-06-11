@@ -21,6 +21,5 @@ agents/__pycache__/
 agents/**/__pycache__/
 agents/checkpoints/
 agents/logs/
-agents/models/
 .secrets/
 *.pyc
