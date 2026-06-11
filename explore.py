@@ -872,12 +872,22 @@ def mover_thread():
         best_heading: float | None = None
         best_score = -1.0
 
+        def _scan_wait(secs: float) -> bool:
+            """Wait up to secs seconds; return True if APPROACH/STOP triggered."""
+            deadline = time.monotonic() + secs
+            while time.monotonic() < deadline:
+                if state_get("mode") in ("APPROACH", "STOP"):
+                    return True
+                time.sleep(0.2)
+            return False
+
         for _ in range(8):
             if state_get("mode") in ("APPROACH", "STOP"):
                 break
 
             do_turn(-45)
-            time.sleep(SCAN_WAIT_S)   # wait for a fresh frame at this heading
+            if _scan_wait(SCAN_WAIT_S):   # door detected mid-wait → abort scan
+                break
 
             # Track the heading with the most open space across all 8 positions.
             os_ = state_get("open_space") or {}
@@ -891,9 +901,11 @@ def mover_thread():
 
             # Optical-flow fallback: rock forward and return for flow depth.
             do_forward(MOVE_SPEED, rock_secs)
-            time.sleep(SCAN_WAIT_S)   # frame B: flow A→B gives depth at H
-            # skip_check=True — we just drove that path, it's clear
+            interrupted = _scan_wait(SCAN_WAIT_S)   # frame B: flow A→B gives depth at H
+            # Always reverse first — keeps odometry correct even on interrupt
             do_reverse_safe(rock_cm, skip_check=True)
+            if interrupted:
+                break
 
         return best_heading
 
