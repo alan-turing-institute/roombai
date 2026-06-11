@@ -866,7 +866,7 @@ def mover_thread():
                 "(fast_depth unavailable)")
         else:
             log("[MOVER] SCAN: 360° fast scan (fast_depth active — no rock needed)")
-        speak("Starting scan.")
+        speak("Search for path to escape you.")
         rock_cm   = SCAN_ROCK_CM
         rock_secs = rock_cm / MOVE_SPEED
 
@@ -968,7 +968,7 @@ def mover_thread():
     # takes only ~3 s (turn + wait), ~24 s total.  If fast_depth is not yet
     # providing depth, falls back to the optical-flow rock (~102 s).
     log("[MOVER] startup: 360° scan")
-    speak("Starting initial scan.")
+    speak("Search for path to escape you.")
     # _vision_idle starts SET (no analysis running), so .wait() returns immediately
     # before any frame has been captured.  Poll until the camera thread has
     # delivered at least one analysed frame with depth data.
