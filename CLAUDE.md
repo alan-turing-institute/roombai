@@ -74,9 +74,16 @@ At the end of the run:
 
 ## Escape Strategy
 
-Use the pre-trained PPO reinforcement learning model to navigate to the exit.
-The agent computes approximate wall distances from the known room map and
-tracks its position by dead reckoning — no camera analysis required.
+The strategy combines the RL model (fast, covers open ground quickly) with camera-based
+decisions (slow, but sees real obstacles). The RL model navigates in short bursts; when
+it gets stuck on furniture or people, Claude takes over with the camera to escape, then
+hands back to RL.
+
+**Known limitation:** the RL model was trained on the static room map and cannot see
+furniture, chairs, or people. It will reach the door area efficiently in a clear room but
+will diverge if it takes many bumps. The camera rescue phases below handle this.
+
+---
 
 ### Step 1 — Set up Python environment
 
@@ -97,10 +104,12 @@ cd ..
 
 If `uv` still isn't found after the install, try: `export PATH="$HOME/.local/bin:$PATH"`
 
+---
+
 ### Step 2 — Capture frame and determine start heading
 
 ```bash
-echo "Starting RL escape agent — loading trained model" >> /tmp/speak_queue.txt
+echo "Starting combined RL and camera escape strategy" >> /tmp/speak_queue.txt
 source ./scripts/capture_frame.sh
 ```
 
@@ -115,31 +124,123 @@ Estimate where the door appears relative to the centre of the image, then choose
 | Door to the far left (~90°) | 290 |
 | Door not visible — behind you | Spin first: `./roomba_pilot/target/debug/pilot send "turn 90"` then re-capture |
 
-These values encode the physical door direction (south-southwest in the room, ≈197° on the map) as seen from the robot's current facing. **Do not use 0.0** — that assumes the robot faces east (+x) and was wrong on the first run.
+Value 200 was empirically confirmed correct in a previous real run when the door was centred.
 
-### Step 3 — Run the RL agent
+---
+
+### Step 3 — RL burst (first attempt)
+
+Run the RL agent for a short burst. It will cover open ground quickly.
 
 ```bash
 cd agents && uv run run_agent_real.py models/best/best_model.zip \
     --start-heading <value-from-step-2> \
-    --max-steps 200 \
+    --max-steps 100 \
     --escape-dist 1500 \
     2>&1 | tee /tmp/rl_run.log
+cd ..
 ```
 
-The agent connects to the pilot daemon on 127.0.0.1:9999, loads the trained model,
-and issues `move`/`turn` commands autonomously until it reaches Door 13 or runs out
-of steps. Each step is printed: action index, command sent, current distance to door.
-If the robot hits a wall it backs off automatically and the dead-reckoning position
-is corrected — the run will not diverge from a single bump.
+Whilst the RL agent is running, use the speak daemon to make humorous comments about its progress. Get creative. Throw in the occasional "Initiating self destruct sequence" followed by a pause and then "Just kidding. Ha ha ha ha.".
 
-Whilst the RL agent is controlling the Roomba, use the speak daemon to make humorous comments about its progress. Get creative. Throw in the occasional "Initiating self destruct sequence" followed by a pause and then "Just kidding. Ha ha ha ha.".
+**If "Reached Door 13!" appears in the log → skip to Step 7 (escaped).**
 
-### Step 4 — Record outcome
+---
+
+### Step 4 — Assess RL run and decide next action
 
 ```bash
+BUMPS=$(grep -c "BUMPED" /tmp/rl_run.log || true)
+LAST_DIST=$(grep -oP 'dist=\K[0-9]+' /tmp/rl_run.log | tail -1)
+echo "Bumps: $BUMPS  Last distance to door: ${LAST_DIST}mm"
+```
+
+- **Fewer than 5 bumps, distance still decreasing:** RL is working well in open space.
+  Run another burst (Step 5a).
+- **5 or more bumps:** Robot hit obstacles (furniture / people). Do camera rescue (Step 5b)
+  before running more RL.
+- **Distance not improving after two bursts:** Switch to camera-only navigation (Step 6).
+
+---
+
+### Step 5a — Continue RL (if path is clear)
+
+```bash
+cd agents && uv run run_agent_real.py models/best/best_model.zip \
+    --start-heading <same-value-as-step-3> \
+    --max-steps 100 \
+    --escape-dist 1500 \
+    2>&1 | tee /tmp/rl_run2.log
 cd ..
-if grep -q "Reached Door 13!" /tmp/rl_run.log; then
+```
+
+Check again for "Reached Door 13!" → if present, go to Step 7. Otherwise go to Step 5b.
+
+---
+
+### Step 5b — Camera rescue (when stuck on obstacles)
+
+The robot is caught on furniture or people. Capture a frame and assess the situation.
+
+```bash
+echo "Obstacle detected — switching to camera for rescue manoeuvre" >> /tmp/speak_queue.txt
+source ./scripts/capture_frame.sh
+```
+
+Look at the frame:
+- **Identify what is blocking:** chair legs, table edge, person's feet, etc.
+- **Which side is more open?** Decide a turn direction.
+
+Issue 2–4 manual pilot commands to escape:
+
+```bash
+# Back away from the obstacle
+./roomba_pilot/target/debug/pilot send "move -20"
+
+# Turn away from the blocked direction (adjust angle to suit the frame)
+./roomba_pilot/target/debug/pilot send "turn 60"   # or turn -60 if open space is to the right
+
+# Check bumpers are clear
+./roomba_pilot/target/debug/pilot send "bumps"
+```
+
+Capture another frame to confirm the robot is free. If still blocked, repeat with a larger
+turn (90° or 120°). Once free, run one more RL burst (Step 5a, 50 steps) to resume progress.
+
+Increment counters for each `pilot send` command and each frame analysis.
+
+---
+
+### Step 6 — Camera-only final approach (fallback)
+
+If RL has failed to make progress after two rescue attempts, navigate entirely by camera.
+This is slower but will reach the door reliably if you can see it.
+
+```bash
+echo "Switching to camera-guided final approach" >> /tmp/speak_queue.txt
+```
+
+Repeat the following loop until you see the robot has passed through the door:
+
+1. `source ./scripts/capture_frame.sh` — capture a frame and analyse it
+2. Estimate the door bearing relative to the robot's current heading:
+   - Door centred → drive forward: `./roomba_pilot/target/debug/pilot send "move 30"`
+   - Door left → turn CCW then drive: `./roomba_pilot/target/debug/pilot send "turn 30"` then `"move 20"`
+   - Door right → turn CW then drive: `./roomba_pilot/target/debug/pilot send "turn -30"` then `"move 20"`
+3. Check bumpers after every move: `./roomba_pilot/target/debug/pilot send "bumps"`
+   - If bumped: back up 15 cm, turn 45° away from the bump side, continue
+4. If door is not visible: rotate 45° and scan again
+5. When the frame shows you are through the doorway (different room / open space beyond) → Step 7
+
+Increment the tool-call and decision counters each iteration.
+
+---
+
+### Step 7 — Record outcome
+
+```bash
+if grep -q "Reached Door 13!" /tmp/rl_run.log /tmp/rl_run2.log 2>/dev/null || \
+   [ "<camera-confirmed-escape>" = "true" ]; then
     echo "Escaped successfully through Door 13" >> /tmp/speak_queue.txt
     ./scripts/finish_run.sh escaped
 else
@@ -147,3 +248,6 @@ else
     ./scripts/finish_run.sh dnf
 fi
 ```
+
+Replace `<camera-confirmed-escape>` with `true` if you confirmed escape via camera in Step 6,
+otherwise leave as `false` so the grep result controls the outcome.
