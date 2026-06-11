@@ -156,12 +156,73 @@ Check again for "Reached Door 13!" → if present, go to Step 7. Otherwise go to
 
 ---
 
-### Step 5b — Camera rescue (when stuck on obstacles)
+### Step 5b — Retrace rescue (first response to being stuck)
 
-The robot is caught on furniture or people. Capture a frame and assess the situation.
+Before using the camera, try retracing the last few RL steps to back out of the obstacle.
+This is fast and avoids a slow camera analysis. Track how many retrace attempts have been made:
 
 ```bash
-echo "Obstacle detected — switching to camera for rescue manoeuvre" >> /tmp/speak_queue.txt
+RESCUE_COUNT=$(cat /tmp/rescue_count 2>/dev/null || echo 0)
+echo "Retrace rescue attempt $((RESCUE_COUNT + 1)) of 3"
+echo "Oh bloody nora! I appear to be stuck. Retracing..." >> /tmp/speak_queue.txt
+```
+
+Extract the last 5 non-bumped commands from the RL log and run them in reverse, negating
+each distance or angle to physically undo those moves:
+
+```bash
+# Get last 5 successful (non-bumped) commands
+LAST_CMDS=$(grep -v "BUMPED" /tmp/rl_run.log /tmp/rl_run2.log 2>/dev/null \
+    | grep -oP 'a=\d+ \K(move|turn) -?[0-9]+' | tail -5)
+
+# Execute in reverse order, negating each value
+echo "$LAST_CMDS" | tac | while read -r kind val; do
+    neg=$(( val * -1 ))
+    ./roomba_pilot/target/debug/pilot send "$kind $neg"
+    sed -i "s/^TOOL_CALLS=.*/TOOL_CALLS=$(( $(grep TOOL_CALLS /tmp/run_state.env | cut -d= -f2) + 1 ))/" /tmp/run_state.env
+done
+```
+
+Then run a short 30-step RL probe to see if the path is now clear:
+
+```bash
+cd agents && uv run run_agent_real.py models/best/best_model.zip \
+    --start-heading <same-value-as-step-3> \
+    --max-steps 30 \
+    --escape-dist 1500 \
+    2>&1 | tee /tmp/rl_probe.log
+cd ..
+```
+
+Check whether the probe ran clean:
+
+```bash
+PROBE_BUMPS=$(grep -c "BUMPED" /tmp/rl_probe.log || true)
+echo "Probe bumps: $PROBE_BUMPS"
+```
+
+- **Fewer than 3 bumps:** Retrace worked — robot is free. Increment rescue count, then continue
+  with a full RL burst (Step 5a).
+- **3 or more bumps:** Retrace did not free the robot. Increment rescue count:
+
+```bash
+echo $((RESCUE_COUNT + 1)) > /tmp/rescue_count
+RESCUE_COUNT=$((RESCUE_COUNT + 1))
+```
+
+  - If `RESCUE_COUNT < 3`: repeat Step 5b (try retracing again, the robot may need a larger
+    backing distance — add an extra `move -30` before retracing this time).
+  - If `RESCUE_COUNT >= 3`: retrace has failed three times. Escalate to camera rescue (Step 5c).
+
+---
+
+### Step 5c — Camera rescue (after 3 failed retraces)
+
+The robot is genuinely trapped and retracing has not freed it. Use the camera to assess
+the situation and manually navigate around the obstacle.
+
+```bash
+echo "Retracing failed 3 times — engaging camera for rescue" >> /tmp/speak_queue.txt
 source ./scripts/capture_frame.sh
 ```
 
@@ -183,7 +244,12 @@ Issue 2–4 manual pilot commands to escape:
 ```
 
 Capture another frame to confirm the robot is free. If still blocked, repeat with a larger
-turn (90° or 120°). Once free, run one more RL burst (Step 5a, 50 steps) to resume progress.
+turn (90° or 120°). Once free, reset the rescue counter and run one more RL burst
+(Step 5a, 50 steps) to resume progress:
+
+```bash
+echo 0 > /tmp/rescue_count
+```
 
 Increment counters for each `pilot send` command and each frame analysis.
 
