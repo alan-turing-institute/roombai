@@ -13,8 +13,12 @@ Key facts about the target, which you MUST use when scoring every captured frame
 
 - The exit is a **light-oak wooden door that is standing OPEN** — swung into the room, hinged on its right side, with a silver lever handle.
 - **The way out is the dark vertical opening to the LEFT of the wood slab** (a corridor is visible beyond it). The flat wood face of the door is NOT the target — it is an obstacle to pass *beside*. Aim the Roomba at the dark gap, not the wood.
-- Surrounding landmarks that confirm you are looking at the right place: a **green "Fire exit" sign** high on the wall above/right of the door; a **glass partition wall with cream lockers** behind it to the left; a **tall black PA speaker** standing on the floor to the far left; a **blue/tan geometric maze-pattern carpet** on the floor in front of the doorway.
-- If a frame shows ANY of these landmarks (especially the open wood door, the fire-exit sign, or the maze carpet), treat it as the door direction — do not wait for a "perfect" match.
+- Surrounding landmarks that confirm you are looking at the right place: a **green "Fire exit" sign** high on the wall above/right of the door; a **glass partition wall with cream lockers** behind it to the left; a **tall black PA speaker** standing on the floor to the far left.
+- **THE FLOOR IS YOUR MOST RELIABLE COMPASS.** The open room is **grey striped carpet**. The doorway sits on a **blue/tan/cream geometric "maze" carpet**. The two patterns meet right at the threshold. So:
+  - Grey striped carpet ahead → you are still in the room; keep crossing toward where it changes.
+  - Blue/tan maze carpet ahead or under you → **you are at the door.** Drive across the maze carpet and out; the exit is wherever that carpet continues into the corridor.
+  - This works even when the wood slab fills the whole frame and you can't see any other landmark — just look at the floor.
+- If a frame shows ANY of these landmarks (especially the maze carpet, the open wood door, or the fire-exit sign), treat it as the door direction — do not wait for a "perfect" match.
 
 ---
 
@@ -160,6 +164,12 @@ source ./scripts/capture_frame.sh      # re-assess
 - Both bumps → back off 25–35 cm, capture, turn toward the largest free space that still heads toward the door.
 - A single obstacle is never a DNF — back off, pick the wider gap, skirt it by ~one robot radius, re-aim at the door.
 - If wheel-drop is active, stop and do not continue until it clears.
+
+**WEDGED (stuck): two or more bumps in nearly the same place, or no forward progress after a recovery.** This is almost always the door's bottom edge or hinge bracket catching the bumper right at the threshold — you are *at the exit*, not blocked. Do NOT keep nudging the same line; that re-wedges you. Instead:
+1. Back off hard: `./scripts/pilot_send.sh "move -35"`.
+2. `source ./scripts/capture_frame.sh` and **compare it directly against [`reference/door.jpg`](reference/door.jpg)** to re-localise — find the dark gap and the maze carpet, and note which side the open gap is on (it is to the LEFT of the wood slab).
+3. Take a clearly *different* approach line: turn a large angle (≥45°) toward the open gap / maze carpet, then drive again. The door is a swinging slab — if it's in your way, aim for the carpet that continues past it.
+4. If still wedged after two different lines, the gap is narrow: square up to the maze carpet, then use short deliberate pushes (`move 40`) straight along the direction the carpet runs into the corridor.
 
 ### Completion
 
