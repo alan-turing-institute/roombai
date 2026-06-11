@@ -962,6 +962,11 @@ def mover_thread():
                 break
 
             # Score this heading: depth open-space, penalised by legs and map obstacles.
+            # open_space is already texture-gated inside _open_space_from_depth
+            # (each third is multiplied by min(1, lap_var/TEXTURE_MIN_VAR)).
+            # Do NOT apply a second texture penalty here — it double-penalises glass
+            # walls and transparent surfaces that look textureless but are passable,
+            # causing the scan to reject the door direction (run 13 failure).
             os_ = state_get("open_space") or {}
             score = os_.get("center", 0.0) + 0.5 * (os_.get("left", 0.0) + os_.get("right", 0.0))
 
@@ -977,20 +982,6 @@ def mover_thread():
                 nearest_fwd = map_ahead[0][1]
                 score *= max(0.0, min(1.0, (nearest_fwd - 30.0) / 90.0))
 
-            # Texture penalty: blank walls / whiteboards read as open space in
-            # fast_depth but have near-zero Laplacian variance.  Read the current
-            # frame synchronously here so the penalty is not subject to thread
-            # timing (belt-and-suspenders on top of open_space texture gating).
-            try:
-                _scan_img = cv2.imread(str(_CURRENT_FRAME), cv2.IMREAD_GRAYSCALE)
-                if _scan_img is not None:
-                    _sh, _sw = _scan_img.shape
-                    _center_crop = _scan_img[:, _sw // 3: 2 * _sw // 3]
-                    _lap_var = float(cv2.Laplacian(_center_crop, cv2.CV_64F).var())
-                    score *= min(1.0, _lap_var / TEXTURE_MIN_VAR)
-            except Exception:
-                pass
-
             # Door detection bonus: strongly prefer headings where door is visible.
             # Door is always open — any detection is a valid approach target.
             door_state = state_get("last_door") or {}
@@ -1002,6 +993,12 @@ def mover_thread():
                     f"dist≈{d_dist:.0f}cm conf={door_conf:.2f}"
                 )
                 score += 5.0
+
+            log(
+                f"[MOVER] SCAN: hdg={odom.heading:.0f}° "
+                f"open=({os_.get('left',0):.2f},{os_.get('center',0):.2f},{os_.get('right',0):.2f}) "
+                f"score={score:.3f}"
+            )
 
             if score > best_score:
                 best_score = score
