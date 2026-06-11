@@ -1021,22 +1021,19 @@ def mover_thread():
         # No clear preference — alternate CW/CCW
         return 90.0 * _default_turn_sign
 
-    def do_bump_scan() -> float | None:
+    def do_bump_scan(bumper: bool = True) -> float | None:
         """
-        Post-bump recovery used in both EXPLORE and APPROACH:
-          1. Back up 60 cm (direct command — avoids the two 180° turns of
-             do_reverse_safe which corrupt the odometry heading).
-          2. Do a full 360° scan to find the door or the most open heading.
-             The scan interrupts early if APPROACH is triggered (door found).
-          3. Clear stale map obstacles near current position so bench-area
-             bumps don't misdirect navigation once the robot has escaped.
-        Returns the best open-space heading seen during the scan.
+        Post-stop recovery: optional backup then 360° scan.
+          bumper=True  — physical bumper hit: back up 10 cm first.
+          bumper=False — software block (legs/depth): no backup, just rescan.
         """
-        _back_secs = 60.0 / MOVE_SPEED
-        send_cmd(f"back {MOVE_SPEED} {_back_secs:.2f}")
-        time.sleep(_back_secs + 0.2)
-        odom.forward(-MOVE_SPEED, _back_secs)
-        obstacle_memory.update_forward(-60.0)
+        if bumper:
+            _back_cm = 10.0
+            _back_secs = _back_cm / MOVE_SPEED
+            send_cmd(f"back {MOVE_SPEED} {_back_secs:.2f}")
+            time.sleep(_back_secs + 0.2)
+            odom.forward(-MOVE_SPEED, _back_secs)
+            obstacle_memory.update_forward(-_back_cm)
         obstacle_memory.clear()
 
         pass  # speak removed
@@ -1242,7 +1239,7 @@ def mover_thread():
                     do_turn(deg)
                 else:
                     prev_bearing = state_get("door_bearing")
-                    do_bump_scan()
+                    do_bump_scan(bumper=status.startswith("bump"))
 
                     # Re-orient toward bearing (updated if door found in scan, else previous).
                     cur_bearing = state_get("door_bearing") or prev_bearing
@@ -1347,7 +1344,7 @@ def mover_thread():
                 state_set(bumps=state_get("bumps") + 1)
                 log(f"[MOVER] bump {side} heading={odom.heading:.0f}°")
 
-                best_hdg = do_bump_scan()
+                best_hdg = do_bump_scan(bumper=status.startswith("bump"))
 
                 if state_get("mode") not in ("APPROACH", "STOP"):
                     if best_hdg is not None:
