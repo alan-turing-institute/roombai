@@ -232,7 +232,7 @@ class VisionProcess:
     ) -> "dict | None":
         if not (self._proc and self._proc.is_alive()):
             log("[VISION] worker died — respawning")
-            speak("Vision worker crashed. Restarting.")
+            pass  # speak removed
             self._spawn()
 
         try:
@@ -245,7 +245,7 @@ class VisionProcess:
             result = self._res.get(timeout=self.INFER_TIMEOUT)
         except Exception:
             log(f"[VISION] {self.INFER_TIMEOUT:.0f}s timeout — killing worker and respawning")
-            speak("Vision timeout. Restarting vision worker.")
+            pass  # speak removed
             self._kill_and_respawn()
             return None
 
@@ -423,7 +423,7 @@ def _read_strategy():
 
         if mode != current:
             log(f"[STRATEGY] mode override → {mode}{' (FORCED)' if force else ''}")
-            speak(f"Strategy update. Switching to {mode}.")
+            pass  # speak removed
             notes = data.get("notes", "")
             if notes:
                 log(f"[STRATEGY] {notes}")
@@ -541,7 +541,7 @@ def camera_thread():
                 f"depth≈{scene_depth}cm stuck={stuck}"
             )
             if stuck and state_get("mode") in ("EXPLORE", "APPROACH"):
-                speak("Robot appears stuck. Changing direction.")
+                pass  # speak removed
 
         # ── Depth map (fast_depth) ───────────────────────────────────────
         if scene["depth_map"] is not None:
@@ -578,7 +578,7 @@ def camera_thread():
             )
             if "person" in labels:
                 log("[YOLO] person visible — door may open soon")
-                speak("Person detected. Watching for door.")
+                pass  # speak removed
                 _maybe_greet(_GREET_PERSON_COOLDOWN_S)
 
             rx, ry, rh = odom.x, odom.y, odom.heading
@@ -623,7 +623,7 @@ def camera_thread():
 
         prev_detected = door_history[-2] if len(door_history) >= 2 else False
         if detected and not prev_detected:
-            speak("Door in sight.")
+            pass  # speak removed
 
         if detected:
             map_recorder.record_door(
@@ -707,7 +707,7 @@ def camera_thread():
 
             elif not door["door_open"] and mode == "APPROACH":
                 log(f"[VISION] Door closed at ≈{dist:.0f}cm — WAIT")
-                speak("Door is closed. Waiting nearby.")
+                pass  # speak removed
                 state_set(mode="WAIT")
                 door_history.clear()
 
@@ -849,7 +849,7 @@ def mover_thread():
             blocked_c = (state_get("blocked") or {}).get("center", False)
             if blocked_c and nearest < dist_cm + 20:
                 log(f"[MOVER] reverse path blocked ({nearest:.0f} cm) — skipping back-move")
-                speak("Reverse path blocked. Staying put.")
+                pass  # speak removed
                 do_turn(180)  # restore heading
                 return False
 
@@ -1039,7 +1039,7 @@ def mover_thread():
         obstacle_memory.update_forward(-60.0)
         obstacle_memory.clear()
 
-        speak("Scanning for open path.")
+        pass  # speak removed
         best_hdg = do_scan_360()
 
         n_cleared = map_recorder.clear_near(odom.x, odom.y, radius_cm=150)
@@ -1048,7 +1048,7 @@ def mover_thread():
 
         return best_hdg
 
-    speak("Beginning room exploration.")
+    pass  # speak removed
     log("[MOVER] starting pos=(0,0) heading=0°")
 
     # ── Startup scan ──────────────────────────────────────────────────────────
@@ -1078,10 +1078,10 @@ def mover_thread():
             delta = (best_hdg - odom.heading + 180) % 360 - 180
             if abs(delta) > 10:
                 log(f"[MOVER] post-scan: turning {delta:+.0f}° toward best open heading {best_hdg:.0f}°")
-                speak("Steering toward most open direction.")
+                pass  # speak removed
                 do_turn(delta)
         log("[MOVER] startup: scan done — beginning exploration")
-        speak("Scan complete. Exploring.")
+        pass  # speak removed
 
     while True:
         # Block until the camera thread has finished analysing the latest frame.
@@ -1101,7 +1101,7 @@ def mover_thread():
         if mode == "STOP":
             send_cmd("stop")
             log("[MOVER] stopped")
-            speak("Stopping.")
+            pass  # speak removed
             break
 
         if mode != "APPROACH":
@@ -1125,7 +1125,7 @@ def mover_thread():
                 # abandoning — the door is still out there.
                 if mode == "APPROACH" and state_get("door_bearing") is not None:
                     log("[MOVER] stuck in APPROACH — wide detour, keeping bearing")
-                    speak("Stuck approaching door. Trying wide detour.")
+                    pass  # speak removed
                     do_forward(MOVE_SPEED, 80.0 / MOVE_SPEED)
                 else:
                     state_set(mode="EXPLORE")
@@ -1149,7 +1149,7 @@ def mover_thread():
                     f"[MOVER] APPROACH: bearing stale ({_approach_turn_deg:.0f}° cumulative "
                     f"turn without visual lock) — rescanning before EXPLORE"
                 )
-                speak("Lost the door. Rescanning.")
+                pass  # speak removed
                 state_set(mode="EXPLORE", door_bearing=None)
                 _approach_turn_deg = 0.0
                 best_hdg = do_scan_360()
@@ -1219,7 +1219,7 @@ def mover_thread():
                     f"[MOVER] APPROACH: center blocked "
                     f"(nearest≈{nearest_cm}cm) → steering {deg:+.0f}°"
                 )
-                speak("Obstacle ahead. Steering around.")
+                pass  # speak removed
                 do_turn(deg)
 
             status, _ = do_forward(speed, burst)
@@ -1238,7 +1238,7 @@ def mover_thread():
                     # forward rather than backing away from the door.
                     deg = choose_avoid_turn()
                     log(f"[MOVER] APPROACH bump: door visible — steer {deg:+.0f}° and push")
-                    speak("Obstacle. Steering around door.")
+                    pass  # speak removed
                     do_turn(deg)
                 else:
                     prev_bearing = state_get("door_bearing")
@@ -1300,7 +1300,7 @@ def mover_thread():
                     f"[MAP] known '{nearest_map_ev.label}' at {map_fwd:.0f}cm ahead "
                     f"({len(map_obs)} map obstacle(s) in cone)"
                 )
-                speak(f"Map shows {nearest_map_ev.label} ahead. Steering around.")
+                pass  # speak removed
                 do_turn(choose_avoid_turn(map_obs))
 
             # ── 2. YOLO real-time avoidance ───────────────────────────────
@@ -1310,7 +1310,7 @@ def mover_thread():
                     f"[MOVER] YOLO avoid: center blocked ≈{nearest_cm:.0f}cm "
                     f"→ turning {deg:+.0f}°"
                 )
-                speak(f"Obstacle at {int(nearest_cm)} centimetres. Steering.")
+                pass  # speak removed
                 do_turn(deg)
 
             # ── 3. fast_depth proactive steering ─────────────────────────
@@ -1330,7 +1330,7 @@ def mover_thread():
                     f"[MOVER] depth steer: center={oc:.2f} (blocked) "
                     f"L={ol:.2f} R={or_:.2f} → {deg:+.0f}°"
                 )
-                speak(f"Depth shows center blocked. Steering {'left' if deg > 0 else 'right'}.")
+                pass  # speak removed
                 do_turn(deg)
 
             # Shorten burst when a door is in the recent window — more frequent
@@ -1365,7 +1365,7 @@ def mover_thread():
                                             odom.y - _last_scan_y)
                 if dist_from_scan >= SCAN_EVERY_CM:
                     log(f"[MOVER] distance scan: {dist_from_scan:.0f}cm since last scan")
-                    speak("Scanning after travelling five metres.")
+                    pass  # speak removed
                     _last_scan_x, _last_scan_y = odom.x, odom.y
                     do_scan_360()
 
@@ -1418,7 +1418,7 @@ def main():
     log(f"Frames:        {FRAME_DIR}")
     log(f"Log:           {LOG_FILE}")
     log("=" * 60)
-    speak("Starting pre-flight model check.")
+    pass  # speak removed
 
     # ── Pre-flight: verify / download / compile all Hailo HEF models ─────────
     # This runs before the pilot daemon check so a bad model path is caught
@@ -1427,7 +1427,7 @@ def main():
     ensure_models(abort_if_required_missing=True)
 
     # ── Pilot daemon ──────────────────────────────────────────────────────────
-    speak("Explore script starting. Connecting to pilot daemon.")
+    pass  # speak removed
     r = send_cmd("safe")
     log(f"pilot safe: {r}")
     r = send_cmd("sense")
@@ -1446,9 +1446,9 @@ def main():
     # Models are loaded inside the child so the main process never touches the
     # Hailo VDevice — avoids PCIe resource conflicts if the child is restarted.
     global _vision
-    speak("Spawning vision worker.")
+    pass  # speak removed
     _vision = VisionProcess()
-    speak("Vision worker ready.")
+    pass  # speak removed
 
     threads = [
         threading.Thread(target=_log_writer,         daemon=True, name="log"),
@@ -1468,7 +1468,7 @@ def main():
         map_recorder.save_events()
         map_path = map_recorder.save_map()
         log(f"Map saved: {map_path}")
-        speak(f"Run complete. Map saved.")
+        pass  # speak removed
     except Exception as e:
         log(f"Map save failed: {e}")
 
@@ -1481,7 +1481,7 @@ def main():
     else:
         log("Bump analysis: no known-obstacle bumps recorded this run.")
 
-    speak("Exploration complete.")
+    pass  # speak removed
 
 
 if __name__ == "__main__":
