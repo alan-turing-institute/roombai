@@ -79,6 +79,8 @@ SCAN_EVERY_CM    = 500         # scan every N cm of odometry travel (clean drive
 MAP_SAVE_INTERVAL = 30         # seconds between periodic map saves
 APPROACH_SLOW_DIST  = 150  # cm — half-speed below this
 APPROACH_STOP_DIST  = 40   # cm — stop and declare arrival
+APPROACH_COMMIT_DIST = 80  # cm — within this, drive straight: no bearing corrections,
+                            #      no avoidance steering (committed to doorway entry)
 
 # Proactive avoidance: steer if an obstacle is detected closer than this.
 # Set to match CHAIR_BLOCK_DIST_CM — allows navigating 60-80 cm corridors
@@ -1207,7 +1209,14 @@ def mover_thread():
                 _approach_turn_deg = 0.0   # bearing freshly confirmed — reset staleness
             heading = odom.heading
             delta   = (door_bearing - heading + 180) % 360 - 180
-            if abs(delta) > 10:
+
+            # Use persisted distance (valid even when door temporarily off-frame).
+            door_dist_cm = state_get("last_door_dist_cm") or 9999
+            commit_entry = door_dist_cm < APPROACH_COMMIT_DIST
+
+            if commit_entry:
+                log(f"[MOVER] APPROACH: commit entry (dist≈{door_dist_cm:.0f}cm) — driving straight")
+            elif abs(delta) > 10:
                 log(
                     f"[MOVER] APPROACH: bearing turn {delta:+.0f}° toward {door_bearing:.0f}° "
                     f"(cumulative={_approach_turn_deg:.0f}° door_visible={door_visible})"
@@ -1215,6 +1224,7 @@ def mover_thread():
                 do_turn(delta)
                 if not door_visible:
                     _approach_turn_deg += abs(delta)
+
             door_dist = last_door.get("door_distance_cm") or 9999
             if door_dist < APPROACH_SLOW_DIST:
                 speed = max(15, int(MOVE_SPEED * door_dist / APPROACH_SLOW_DIST))
@@ -1224,36 +1234,37 @@ def mover_thread():
                 speed = MOVE_SPEED
                 burst = MOVE_BURST
 
-            # Proactive avoidance: check map, memory, then live camera
-            blocked    = state_get("blocked") or {}
-            nearest_cm = state_get("nearest_cm")
-            mem = obstacle_memory.get_blocking()
-            if mem["obstacles"]:
-                for side, val in mem["blocked"].items():
-                    if val:
-                        blocked[side] = True
-                if mem["nearest_cm"] is not None:
-                    if nearest_cm is None or mem["nearest_cm"] < nearest_cm:
-                        nearest_cm = mem["nearest_cm"]
-            map_obs    = map_recorder.obstacles_ahead(
-                odom.x, odom.y, odom.heading,
-                look_dist_cm=MAP_AVOID_DIST_CM,
-            )
-            if map_obs:
-                ev, map_fwd, _ = map_obs[0]
-                log(f"[MAP] APPROACH: known '{ev.label}' at {map_fwd:.0f}cm → steering")
-                do_turn(choose_avoid_turn(map_obs))
-            elif blocked.get("center") and nearest_cm is not None and nearest_cm < AVOID_STEER_DIST_CM:
-                # Only steer for YOLO obstacles with a known metric distance.
-                # Leg detections (nearest_cm=None) are ignored in APPROACH — there
-                # is usually floor clearance past seated people's legs.
-                deg = choose_avoid_turn()
-                log(
-                    f"[MOVER] APPROACH: center blocked "
-                    f"(nearest≈{nearest_cm}cm) → steering {deg:+.0f}°"
+            # Proactive avoidance: skip entirely once committed to doorway entry
+            # (door frame reads as an obstacle and causes the fatal frame-clipping turn).
+            if not commit_entry:
+                blocked    = state_get("blocked") or {}
+                nearest_cm = state_get("nearest_cm")
+                mem = obstacle_memory.get_blocking()
+                if mem["obstacles"]:
+                    for side, val in mem["blocked"].items():
+                        if val:
+                            blocked[side] = True
+                    if mem["nearest_cm"] is not None:
+                        if nearest_cm is None or mem["nearest_cm"] < nearest_cm:
+                            nearest_cm = mem["nearest_cm"]
+                map_obs    = map_recorder.obstacles_ahead(
+                    odom.x, odom.y, odom.heading,
+                    look_dist_cm=MAP_AVOID_DIST_CM,
                 )
-                pass  # speak removed
-                do_turn(deg)
+                if map_obs:
+                    ev, map_fwd, _ = map_obs[0]
+                    log(f"[MAP] APPROACH: known '{ev.label}' at {map_fwd:.0f}cm → steering")
+                    do_turn(choose_avoid_turn(map_obs))
+                elif blocked.get("center") and nearest_cm is not None and nearest_cm < AVOID_STEER_DIST_CM:
+                    # Only steer for YOLO obstacles with a known metric distance.
+                    # Leg detections (nearest_cm=None) are ignored in APPROACH — there
+                    # is usually floor clearance past seated people's legs.
+                    deg = choose_avoid_turn()
+                    log(
+                        f"[MOVER] APPROACH: center blocked "
+                        f"(nearest≈{nearest_cm}cm) → steering {deg:+.0f}°"
+                    )
+                    do_turn(deg)
 
             status, _ = do_forward(speed, burst)
             if status.startswith("bump") or status == "blocked_legs":
