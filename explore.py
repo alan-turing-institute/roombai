@@ -583,15 +583,6 @@ def camera_thread():
                 speak("Person detected. Watching for door.")
                 _maybe_greet(_GREET_PERSON_COOLDOWN_S)
 
-        # Soft person check: greet even when full-body confidence < 0.35.
-        # From floor level, seated/partially-visible people rarely hit 0.35.
-        if scene.get("person_soft") and "person" not in (yolo_labels(detections) if detections else []):
-            log(f"[GREET] soft person detection (conf≥0.15) — attempting greeting")
-            _maybe_greet(_GREET_PERSON_COOLDOWN_S)
-
-        # Auto-greet: fire every 2 minutes regardless of person detection.
-        _maybe_greet()   # uses _GREET_AUTO_COOLDOWN_S = 120 s
-
             rx, ry, rh = odom.x, odom.y, odom.heading
             for det in blocking:
                 map_recorder.record_yolo(rx, ry, rh,
@@ -608,6 +599,15 @@ def camera_thread():
                         det["class_name"], dist_cm, lateral_cm,
                         conf=det.get("confidence", 1.0),
                     )
+
+        # Soft person check: greet even when full-body confidence < 0.35.
+        # From floor level, seated/partially-visible people rarely hit 0.35.
+        if scene.get("person_soft") and "person" not in (yolo_labels(detections) if detections else []):
+            log(f"[GREET] soft person detection (conf≥0.15) — attempting greeting")
+            _maybe_greet(_GREET_PERSON_COOLDOWN_S)
+
+        # Auto-greet: fire every 2 minutes regardless of person detection.
+        _maybe_greet()   # uses _GREET_AUTO_COOLDOWN_S = 120 s
 
         # ── Door detection (fused) ────────────────────────────────────────
         yolo_doors = scene.get("yolo_doors", [])
