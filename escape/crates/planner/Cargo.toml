@@ -8,5 +8,6 @@ escape-core = { path = "../core" }
 vision = { path = "../vision" }
 
 [dev-dependencies]
-# Used only by the offline steer_overlay example to load/save frames.
+# Used only by the offline steer_overlay / replay_overlay examples.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+serde_json = "1"

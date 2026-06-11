@@ -56,9 +56,6 @@ fn main() {
         None => load_fixtures(),
     };
 
-    // Known-floor prior (color + texture) for the seed gate, built from the
-    // labeled fixtures — the same gate the production pipeline runs with.
-    let prior = vision::fixture::build_floor_prior(&fixtures_root()).expect("build floor prior");
     let cal = ImageCal::default();
     let nav_params = NavParams::default();
     // One navigator across the sequence so search hysteresis is exercised.
@@ -69,7 +66,6 @@ fn main() {
         let params = Params {
             n_columns: job.n_columns,
             ignore_rect: job.ignore_rect,
-            floor_prior: Some(prior.clone()),
             ..Default::default()
         };
         let fs = segment_floor(&Frame { width: job.w, height: job.h, rgb: &job.rgb }, &params);

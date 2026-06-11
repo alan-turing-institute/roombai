@@ -28,20 +28,12 @@ fn load_frame(name: &str) -> (Vec<u8>, u32, u32) {
     (img.into_raw(), w, h)
 }
 
-/// The known-floor prior, built once from the (non-holdout) fixtures — the same
-/// gate the production pipeline runs with, so these tests exercise it too.
-fn training_prior() -> &'static vision::FloorPrior {
-    static PRIOR: std::sync::OnceLock<vision::FloorPrior> = std::sync::OnceLock::new();
-    PRIOR.get_or_init(|| {
-        vision::fixture::build_floor_prior(&fixtures_dir()).expect("build floor prior")
-    })
-}
-
 fn params_for(label: &FloorLabel) -> Params {
+    // Default Params has the whole-frame block gate on — the same gate the
+    // production pipeline runs with, so these tests exercise it too.
     Params {
         n_columns: label.n_columns(),
         ignore_rect: label.ignore_rect.map(|[x, y, w, h]| (x, y, w, h)),
-        floor_prior: Some(training_prior().clone()),
         ..Default::default()
     }
 }
@@ -126,9 +118,9 @@ fn boundary_matches_labels() {
 /// floor. Today it seeds its floor model from the bottom-centre patch, which is
 /// sampling the wall, so the wall becomes "floor" and `free_frac` reads ~open.
 ///
-/// Fixed by the floor-model-prior seed gate (SPEC §4.2): the seed patch here is
-/// the wall, which doesn't match the known-floor prior, so the frame is reported
-/// blocked instead of open.
+/// Caught by the whole-frame block gate: a wall filling the view has near-zero
+/// chroma spread (one uniform colour), so the frame is reported blocked instead
+/// of open. (Replaced the old patch-based seed gate.)
 #[test]
 fn near_obstacle_not_reported_as_open() {
     let labels = load_dir(&labels_dir()).expect("load labels");

@@ -28,7 +28,7 @@ use camera::Camera;
 use driver::{Config, Driver};
 use escape_core::{Reflex, RobotIo, SensorFrame, Twist};
 use planner::{freespace_to_polar, ImageCal, NavState, Navigator, NavParams};
-use vision::{segment_floor, Frame, Params};
+use vision::{segment_floor, Frame, Params, GATE_CHROMA_SPREAD};
 
 const LOOP_HZ: u64 = 10;
 const CAMERA_FPS: u32 = 15;
@@ -39,18 +39,17 @@ const REVERSE_SPEED_MM_S: f64 = -100.0;
 struct Opts {
     port: String,
     max_speed: f64,
+    /// Drive only when a heading's clearance ≥ this (planner `safe_clearance`).
+    safe_clearance: f32,
+    /// Gate the frame as blocked when chroma spread < this (vision gate).
+    block_chroma: f32,
     record: Option<PathBuf>,
-    fixtures: PathBuf,
-}
-
-fn default_fixtures() -> PathBuf {
-    // Built on the Pi, so this resolves to the checked-out fixtures at runtime.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../vision/tests/fixtures")
 }
 
 fn usage() -> ! {
     eprintln!(
-        "usage: wander [--port /dev/ttyUSB0] [--max-speed MM_S] [--record DIR] [--fixtures DIR]"
+        "usage: wander [--port /dev/ttyUSB0] [--max-speed MM_S] \
+         [--safe-clearance FRAC] [--block-chroma SPREAD] [--record DIR]"
     );
     std::process::exit(2);
 }
@@ -59,22 +58,29 @@ fn parse_args() -> Opts {
     let mut o = Opts {
         port: "/dev/ttyUSB0".into(),
         max_speed: 150.0, // conservative first-run cap; raise once tuned
+        // Defaults are the decided values, pulled from the library so they stay
+        // in sync if the crate defaults change.
+        safe_clearance: NavParams::default().safe_clearance,
+        block_chroma: GATE_CHROMA_SPREAD,
         record: None,
-        fixtures: default_fixtures(),
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
             "--port" => o.port = it.next().unwrap_or_else(|| usage()),
-            "--max-speed" => {
-                o.max_speed = it.next().and_then(|s| s.parse().ok()).unwrap_or_else(|| usage())
-            }
+            "--max-speed" => o.max_speed = next_num(&mut it),
+            "--safe-clearance" => o.safe_clearance = next_num(&mut it) as f32,
+            "--block-chroma" => o.block_chroma = next_num(&mut it) as f32,
             "--record" => o.record = Some(PathBuf::from(it.next().unwrap_or_else(|| usage()))),
-            "--fixtures" => o.fixtures = PathBuf::from(it.next().unwrap_or_else(|| usage())),
             _ => usage(),
         }
     }
     o
+}
+
+/// Parse the next CLI token as a number, or exit with usage.
+fn next_num(it: &mut impl Iterator<Item = String>) -> f64 {
+    it.next().and_then(|s| s.parse().ok()).unwrap_or_else(|| usage())
 }
 
 fn main() {
@@ -86,16 +92,7 @@ fn main() {
         ctrlc::set_handler(move || a.store(true, Ordering::SeqCst)).expect("install ctrl-c handler");
     }
 
-    // Known-floor prior (colour + texture) for the seed gate — same gate the
-    // offline steer_overlay runs with.
-    tts::say("Wander starting. Building floor model.");
-    let prior = match vision::fixture::build_floor_prior(&opts.fixtures) {
-        Ok(p) => p,
-        Err(e) => {
-            tts::say(&format!("Could not build floor model from {}: {e}.", opts.fixtures.display()));
-            std::process::exit(1);
-        }
-    };
+    tts::say("Wander starting.");
 
     // Bring up the driver (wakes the robot to SAFE, probes odometry, starts the
     // 20 Hz control loop). The robot must already be powered on.
@@ -122,9 +119,15 @@ fn main() {
     }
 
     let cal = ImageCal::default();
-    let nav_params = NavParams { max_v_mm_s: opts.max_speed, ..Default::default() };
+    let nav_params =
+        NavParams { max_v_mm_s: opts.max_speed, safe_clearance: opts.safe_clearance, ..Default::default() };
     let mut nav = Navigator::new(nav_params);
-    let base_params = Params { floor_prior: Some(prior), ..Default::default() };
+    let base_params =
+        Params { block_chroma_spread_below: Some(opts.block_chroma), ..Default::default() };
+    tts::say(&format!(
+        "Safe clearance {:.2}, block chroma {:.1}.",
+        opts.safe_clearance, opts.block_chroma
+    ));
 
     tts::say("Driving.");
     let outcome = run_loop(&opts, &driver, &sensors, &mut cam, &mut nav, &cal, &base_params, &abort);

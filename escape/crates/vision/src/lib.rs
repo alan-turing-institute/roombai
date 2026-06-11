@@ -15,9 +15,6 @@
 //! `tools/vision_label/prototype_seg.py`); mean abs per-column error ≈ 0.07.
 
 pub mod fixture;
-pub mod floor_prior;
-
-pub use floor_prior::{FloorPrior, FloorPriorBuilder};
 
 /// One column's view of how far the floor extends before the first obstacle.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -76,21 +73,16 @@ pub struct Params {
     pub row_smooth: usize,
     /// Median-filter width applied across the output columns.
     pub col_smooth: usize,
-    /// Known-floor appearance prior. When set, the seed patch is gated against
-    /// it: if the patch the segmenter is about to adopt as its floor model does
-    /// not look like known floor, the frame is reported blocked rather than
-    /// letting a near obstacle (a wall in the bumper's face) masquerade as open
-    /// floor. `None` disables the gate (legacy adaptive-only behaviour).
-    pub floor_prior: Option<FloorPrior>,
-    /// A seed pixel counts as floor-like if its prior likelihood ≥ this.
-    pub prior_pixel_thresh: f32,
-    /// The seed patch is trusted only if at least this fraction of it is
-    /// floor-like under the prior; below this the frame is reported blocked.
-    pub seed_floor_frac: f32,
-    /// The seed patch's texture energy must be at least this fraction of the
-    /// prior's mean floor texture; a near-flat patch (smooth wall/door, same
-    /// colour as the floor) falls below it and the frame is reported blocked.
-    pub seed_texture_min_frac: f32,
+    /// Whole-frame "filled with one thing" gate. If the frame's chroma spread
+    /// ([`frame_chroma_spread`]) is below this, the view is a single uniform
+    /// surface (wall / locker / door / bag in the bumper's face) with no
+    /// navigable structure, so the frame is reported blocked instead of letting
+    /// a near obstacle masquerade as open floor. `None` disables the gate.
+    ///
+    /// Replaces the old patch-based seed gate, which keyed off the bottom-centre
+    /// patch against a static floor prior — fragile to lighting/white-balance
+    /// drift. This gate needs no prior and no per-run calibration.
+    pub block_chroma_spread_below: Option<f32>,
 }
 
 impl Default for Params {
@@ -109,13 +101,70 @@ impl Default for Params {
             run: 4,
             row_smooth: 5,
             col_smooth: 3,
-            // Gate off by default so the type has no data dependency; the
-            // pipeline and tests opt in by attaching a prior.
-            floor_prior: None,
-            prior_pixel_thresh: 0.01,
-            seed_floor_frac: 0.5,
-            seed_texture_min_frac: 0.3,
+            // The gate is self-contained (no data dependency), so it is on by
+            // default. Threshold sits in the gap between the labeled blocked and
+            // clear sets (see tests/uniformity_gate.rs).
+            block_chroma_spread_below: Some(GATE_CHROMA_SPREAD),
         }
+    }
+}
+
+/// Default chroma-spread threshold for the whole-frame block gate. Chosen to sit
+/// in the gap between the labeled blocked frames (≤ ~9) and clear scenes (≥ ~12);
+/// see `tests/uniformity_gate.rs`.
+pub const GATE_CHROMA_SPREAD: f32 = 10.5;
+
+/// Fixed grid the block gate works on, so the metric is resolution-independent
+/// (the same for a 640×360 camera frame and a 4608×2592 phone photo).
+const GATE_GRID_W: usize = 32;
+const GATE_GRID_H: usize = 18;
+
+/// Whole-frame colour-variety measure: the mean spread of per-cell chroma
+/// `(R−G, G−B)` from the frame's mean chroma, over a fixed
+/// [`GATE_GRID_W`]×[`GATE_GRID_H`] grid of block-averaged cells.
+///
+/// Low when one uniformly-coloured surface fills the view (a wall, locker, door,
+/// or bag pressed against the bumper); high for a varied navigable scene (floor,
+/// walls, and objects of different colours). It is brightness-independent — only
+/// hue/colour direction counts — so it still flags a grey locker whose vents and
+/// shadows vary in luma but not in colour.
+pub fn frame_chroma_spread(frame: &Frame) -> f32 {
+    let (w, h) = (frame.width as usize, frame.height as usize);
+    let n_cells = GATE_GRID_W * GATE_GRID_H;
+    let mut chroma = Vec::with_capacity(n_cells);
+    for gy in 0..GATE_GRID_H {
+        let y0 = gy * h / GATE_GRID_H;
+        let y1 = ((gy + 1) * h / GATE_GRID_H).max(y0 + 1).min(h);
+        for gx in 0..GATE_GRID_W {
+            let x0 = gx * w / GATE_GRID_W;
+            let x1 = ((gx + 1) * w / GATE_GRID_W).max(x0 + 1).min(w);
+            let (mut sr, mut sg, mut sb, mut cnt) = (0u64, 0u64, 0u64, 0u64);
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let i = (y * w + x) * 3;
+                    sr += frame.rgb[i] as u64;
+                    sg += frame.rgb[i + 1] as u64;
+                    sb += frame.rgb[i + 2] as u64;
+                    cnt += 1;
+                }
+            }
+            let cnt = cnt.max(1) as f32;
+            let (r, g, b) = (sr as f32 / cnt, sg as f32 / cnt, sb as f32 / cnt);
+            chroma.push((r - g, g - b));
+        }
+    }
+    let inv = 1.0 / chroma.len() as f32;
+    let (mx, my) = chroma.iter().fold((0.0, 0.0), |(ax, ay), &(x, y)| (ax + x, ay + y));
+    let (mx, my) = (mx * inv, my * inv);
+    chroma.iter().map(|&(x, y)| ((x - mx).powi(2) + (y - my).powi(2)).sqrt()).sum::<f32>() * inv
+}
+
+/// Whether the frame should be gated as "filled with one uniform surface", per
+/// [`Params::block_chroma_spread_below`].
+pub fn is_frame_blocked(frame: &Frame, params: &Params) -> bool {
+    match params.block_chroma_spread_below {
+        Some(t) => frame_chroma_spread(frame) < t,
+        None => false,
     }
 }
 
@@ -191,53 +240,24 @@ pub fn segment_floor(frame: &Frame, params: &Params) -> FreeSpace {
         (frame.rgb[i], frame.rgb[i + 1], frame.rgb[i + 2])
     };
 
+    // 0. Whole-frame block gate: if one uniform surface fills the view (no
+    //    navigable structure), report blocked before trying to find a boundary.
+    if is_frame_blocked(frame, params) {
+        return FreeSpace { columns: vec![Column { free_frac: 0.0, confidence: 1.0 }; n] };
+    }
+
     // 1. Floor colour model from the seed patch directly ahead of the robot.
     let r0 = ((1.0 - params.seed_rows) * h as f32) as usize;
     let c0 = ((0.5 - params.seed_width / 2.0) * w as f32) as usize;
     let c1 = ((0.5 + params.seed_width / 2.0) * w as f32) as usize;
     let mut hist = vec![0u32; params.h_bins * params.s_bins * params.v_bins];
-    // While seeding, also measure how much of the seed patch looks like known
-    // floor — by colour (prior backprojection) and by texture (local |∇|) — to
-    // gate the whole frame below.
-    let (mut seed_total, mut seed_floorish) = (0u32, 0u32);
-    let (mut seed_grad_sum, mut seed_grad_n) = (0i64, 0u32);
     for y in r0..h {
         for x in c0..c1 {
             let (r, g, b) = px(x, y);
             hist[bin_index(r, g, b, params)] += 1;
-            if let Some(prior) = &params.floor_prior {
-                seed_total += 1;
-                if prior.likelihood(r, g, b) >= params.prior_pixel_thresh {
-                    seed_floorish += 1;
-                }
-                if x + 1 < c1 && y + 1 < h {
-                    let g0 = floor_prior::luma(r, g, b);
-                    let (rr, rg, rb) = px(x + 1, y);
-                    let (dr, dg, db) = px(x, y + 1);
-                    seed_grad_sum += (floor_prior::luma(rr, rg, rb) - g0).abs() as i64
-                        + (floor_prior::luma(dr, dg, db) - g0).abs() as i64;
-                    seed_grad_n += 1;
-                }
-            }
         }
     }
     let hmax = *hist.iter().max().unwrap_or(&1) as f32;
-
-    // Seed gate: the segmenter is about to treat the seed patch as floor. If the
-    // patch doesn't look like known floor — wrong colour (a coloured obstacle)
-    // OR too smooth (a same-coloured flat wall/door) — the robot is staring at
-    // an obstacle, so report blocked rather than letting it pass as open floor.
-    if let Some(prior) = &params.floor_prior {
-        let floor_frac = if seed_total > 0 { seed_floorish as f32 / seed_total as f32 } else { 0.0 };
-        let seed_texture =
-            if seed_grad_n > 0 { seed_grad_sum as f32 / seed_grad_n as f32 } else { 0.0 };
-        let texture_ok = seed_texture >= params.seed_texture_min_frac * prior.floor_texture_mean;
-        if floor_frac < params.seed_floor_frac || !texture_ok {
-            return FreeSpace {
-                columns: vec![Column { free_frac: 0.0, confidence: 1.0 - floor_frac.min(1.0) }; n],
-            };
-        }
-    }
 
     // 2. Per-pixel floor mask via normalised backprojection >= density.
     //    ignore_rect pixels are forced to "floor" so they never form a boundary.
@@ -336,8 +356,12 @@ mod tests {
 
     #[test]
     fn all_floor_reports_open() {
+        // A single-colour frame is intentionally treated as blocked by the
+        // whole-frame gate (it's "filled with one thing"), so disable the gate
+        // here to isolate the boundary scan on an all-floor frame.
         let (rgb, w, h) = split_frame(64, 48, 48); // entirely floor
-        let fs = segment_floor(&Frame { width: w, height: h, rgb: &rgb }, &Params::default());
+        let params = Params { block_chroma_spread_below: None, ..Default::default() };
+        let fs = segment_floor(&Frame { width: w, height: h, rgb: &rgb }, &params);
         for col in &fs.columns {
             assert!(col.free_frac > 0.9, "expected open, got {}", col.free_frac);
         }

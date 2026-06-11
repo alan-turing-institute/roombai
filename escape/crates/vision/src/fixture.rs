@@ -45,48 +45,6 @@ impl FloorLabel {
     }
 }
 
-/// Build a [`FloorPrior`](crate::FloorPrior) from the labeled fixtures: for each
-/// non-holdout label, the pixels below the drawn boundary (per column) are known
-/// floor, so they're accumulated into the prior histogram. This is the offline
-/// "known floor from S1 footage" the seed gate checks against.
-///
-/// `fixtures_dir` must contain `labels/` and `images/` subdirectories.
-pub fn build_floor_prior(fixtures_dir: &std::path::Path) -> std::io::Result<crate::FloorPrior> {
-    let p = crate::Params::default();
-    let mut builder = crate::FloorPriorBuilder::new(p.h_bins, p.s_bins, p.v_bins);
-    for label in load_dir(&fixtures_dir.join("labels"))? {
-        if label.holdout {
-            continue;
-        }
-        let img = image::open(fixtures_dir.join("images").join(&label.image))
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?
-            .to_rgb8();
-        let (w, h) = img.dimensions();
-        let n = label.columns.len();
-        for (c, &frac) in label.columns.iter().enumerate() {
-            let x0 = c as u32 * w / n as u32;
-            let x1 = (((c + 1) as u32 * w) / n as u32).max(x0 + 1);
-            // Floor is everything from the boundary row down to the bottom.
-            let boundary = ((1.0 - frac) * h as f32) as u32;
-            for y in boundary..h {
-                for x in x0..x1 {
-                    let px = img.get_pixel(x, y);
-                    builder.add(px[0], px[1], px[2]);
-                    if x + 1 < w && y + 1 < h {
-                        let g0 = crate::floor_prior::luma(px[0], px[1], px[2]);
-                        let gr = img.get_pixel(x + 1, y);
-                        let gd = img.get_pixel(x, y + 1);
-                        let grad = (crate::floor_prior::luma(gr[0], gr[1], gr[2]) - g0).abs()
-                            + (crate::floor_prior::luma(gd[0], gd[1], gd[2]) - g0).abs();
-                        builder.add_texture(grad as f32);
-                    }
-                }
-            }
-        }
-    }
-    Ok(builder.finalize())
-}
-
 /// Load all `*.json` labels from a directory, sorted by filename.
 pub fn load_dir(dir: &std::path::Path) -> std::io::Result<Vec<FloorLabel>> {
     let mut entries: Vec<_> = std::fs::read_dir(dir)?

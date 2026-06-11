@@ -85,7 +85,7 @@ impl Default for NavParams {
     fn default() -> Self {
         // First-guess values, to be tuned by eye on the steer_overlay output.
         NavParams {
-            safe_clearance: 0.40,
+            safe_clearance: 0.33,
             cruise_clearance: 0.80,
             min_confidence: 0.20,
             turn_penalty: 0.6,
