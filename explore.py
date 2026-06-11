@@ -1033,28 +1033,22 @@ def mover_thread():
                 and last_door.get("confidence", 0) >= DOOR_CONFIRM_MIN_CONF
             )
 
+            # Camera thread maintains door_bearing via heading+offset at capture time.
+            # The mover always steers by bearing only — no visual-first override.
+            # Visual-first caused the robot to go 180° wrong: it overwrote the
+            # camera's correct bearing with the mover's heading (which had often
+            # already turned away from the door due to threading latency).
             if door_visible:
-                # Vision-first steering: camera gives ground truth about door direction
-                # right now — more reliable than odometry-drifted bearing.
-                pos   = last_door.get("door_position", "center")
-                steer = {"left": +25, "center": 0, "right": -25}.get(pos, 0)
-                if abs(steer) > 5:
-                    log(f"[MOVER] APPROACH: visual steer {steer:+.0f}° (door {pos})")
-                    do_turn(steer)
-                    _approach_turn_deg += abs(steer)
-                # Refresh bearing from current heading — keeps it valid for blind phase
-                state_set(door_bearing=odom.heading)
-                _approach_turn_deg = 0.0   # bearing just confirmed visually — reset staleness
-            else:
-                # Door not in frame — use bearing as compass fallback
-                heading = odom.heading
-                delta   = (door_bearing - heading + 180) % 360 - 180
-                if abs(delta) > 10:
-                    log(
-                        f"[MOVER] APPROACH: bearing turn {delta:+.0f}° toward {door_bearing:.0f}° "
-                        f"(cumulative={_approach_turn_deg:.0f}°)"
-                    )
-                    do_turn(delta)
+                _approach_turn_deg = 0.0   # bearing freshly confirmed — reset staleness
+            heading = odom.heading
+            delta   = (door_bearing - heading + 180) % 360 - 180
+            if abs(delta) > 10:
+                log(
+                    f"[MOVER] APPROACH: bearing turn {delta:+.0f}° toward {door_bearing:.0f}° "
+                    f"(cumulative={_approach_turn_deg:.0f}° door_visible={door_visible})"
+                )
+                do_turn(delta)
+                if not door_visible:
                     _approach_turn_deg += abs(delta)
             door_dist = last_door.get("door_distance_cm") or 9999
             if door_dist < APPROACH_SLOW_DIST:
@@ -1102,7 +1096,14 @@ def mover_thread():
                 bump_R = "R" in status
                 _approach_bumps += 1
                 log(f"[MOVER] APPROACH: {status} ({_approach_bumps})")
-                do_reverse_safe(40, skip_check=True)
+                # Back up directly without turning — do_reverse_safe uses two
+                # 180° turns which corrupt the odometry heading and caused the
+                # robot to end up pointing 180° away from the door.
+                _back_secs = 40.0 / MOVE_SPEED
+                send_cmd(f"back {MOVE_SPEED} {_back_secs:.2f}")
+                time.sleep(_back_secs + 0.2)
+                odom.forward(-MOVE_SPEED, _back_secs)
+                obstacle_memory.update_forward(-40.0)
 
                 if _approach_bumps >= 3:
                     # Can't drive straight to door — sidestep around obstacle
