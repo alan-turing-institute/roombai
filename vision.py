@@ -461,6 +461,7 @@ def _infer_door_yolo(img_bgr: np.ndarray, conf_thresh: float = 0.30) -> list[dic
             "bbox_px":    (px1, py1, px2, py2),
             "confidence": round(float(preds[i, 4]), 3),
             "position":   pos,
+            "cx":         round(cx_orig),
         })
 
     return detections
@@ -490,10 +491,11 @@ def _fuse_door_detections(cv_door: dict, yolo_doors: list[dict], orig_w: int) ->
         best = max(yolo_doors, key=lambda d: d["confidence"])
         return {
             **cv_door,
-            "door_visible":  True,
-            "door_open":     False,
-            "door_position": best["position"],
-            "confidence":    round(best["confidence"] * 0.7, 3),
+            "door_visible":   True,
+            "door_open":      False,
+            "door_position":  best["position"],
+            "door_center_px": best.get("cx"),
+            "confidence":     round(best["confidence"] * 0.7, 3),
             "notes": (
                 f"YOLO door panel at {best['position']} "
                 f"(conf={best['confidence']:.2f}); no geometric gap yet"
@@ -1120,6 +1122,7 @@ def detect_door_cv(
     """
     null: dict = {
         "door_visible": False, "door_open": False, "door_position": None,
+        "door_center_px": None,
         "in_doorway": False, "door_pixel_width": 0, "door_distance_cm": None,
         "gap_real_width_cm": None, "confidence": 0.0, "notes": "no door",
     }
@@ -1237,6 +1240,7 @@ def detect_door_cv(
             "door_visible":     True,
             "door_open":        door_open,
             "door_position":    pos,
+            "door_center_px":   round(center_x),
             "in_doorway":       in_doorway,
             "door_pixel_width": gap,
             "door_distance_cm": door_dist,

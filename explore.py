@@ -46,6 +46,7 @@ from model_setup import ensure_models
 from vision import (
     ObstacleMemory,
     OdometryTracker,
+    TEXTURE_MIN_VAR,
     yolo_labels,
 )
 
@@ -645,13 +646,18 @@ def camera_thread():
                 and door.get("door_open")
                 and door.get("confidence", 0) >= DOOR_FASTTRACK_CONF
                 and state_get("mode") not in ("APPROACH", "STOP", "WAIT")):
-            pos     = door.get("door_position", "center")
-            offset  = {"left": 30, "center": 0, "right": -30}.get(pos, 0)
+            if door.get("door_center_px") is not None:
+                error_px = door["door_center_px"] - 320
+                offset = -error_px * (66.0 / 640.0)
+            else:
+                pos = door.get("door_position", "center")
+                offset = {"left": 30, "center": 0, "right": -30}.get(pos, 0)
             bearing = (odom.heading + offset) % 360
             dist_ft = door.get("door_distance_cm") or 9999
             log(
                 f"[VISION] FAST-TRACK conf={door['confidence']:.2f} open door "
-                f"{pos} at ≈{dist_ft:.0f}cm → APPROACH {bearing:.0f}°"
+                f"px={door.get('door_center_px')} offset={offset:+.1f}° "
+                f"at ≈{dist_ft:.0f}cm → APPROACH {bearing:.0f}°"
             )
             speak("I see the door, see you.")
             state_set(mode="APPROACH", door_bearing=bearing)
@@ -669,18 +675,32 @@ def camera_thread():
                     door_history.clear()
 
             elif door["door_open"] and mode == "APPROACH":
-                pos    = door.get("door_position", "center")
-                offset = {"left": 25, "center": 0, "right": -25}.get(pos, 0)
-                if abs(offset) > 0:
+                if door.get("door_center_px") is not None:
+                    error_px = door["door_center_px"] - 320
+                    offset = -error_px * (66.0 / 640.0)
+                else:
+                    pos = door.get("door_position", "center")
+                    offset = {"left": 25, "center": 0, "right": -25}.get(pos, 0)
+                if abs(offset) > 1:
                     new_bearing = (odom.heading + offset) % 360
-                    log(f"[VISION] APPROACH: door on {pos}, correcting → {new_bearing:.0f}°")
+                    log(
+                        f"[VISION] APPROACH: pixel-steer {offset:+.1f}° "
+                        f"(px={door.get('door_center_px')}) → bearing {new_bearing:.0f}°"
+                    )
                     state_set(door_bearing=new_bearing)
 
             elif door["door_open"] and mode not in ("APPROACH", "STOP", "WAIT"):
-                pos     = door.get("door_position", "center")
-                offset  = {"left": 30, "center": 0, "right": -30}.get(pos, 0)
+                if door.get("door_center_px") is not None:
+                    error_px = door["door_center_px"] - 320
+                    offset = -error_px * (66.0 / 640.0)
+                else:
+                    pos = door.get("door_position", "center")
+                    offset = {"left": 30, "center": 0, "right": -30}.get(pos, 0)
                 bearing = (odom.heading + offset) % 360
-                log(f"[VISION] Open door on {pos} at ≈{dist:.0f}cm → APPROACH bearing={bearing:.0f}°")
+                log(
+                    f"[VISION] Open door px={door.get('door_center_px')} "
+                    f"offset={offset:+.1f}° at ≈{dist:.0f}cm → APPROACH {bearing:.0f}°"
+                )
                 speak("I see the door, see you.")
                 state_set(mode="APPROACH", door_bearing=bearing)
                 door_history.clear()
@@ -905,6 +925,20 @@ def mover_thread():
             if map_ahead:
                 nearest_fwd = map_ahead[0][1]
                 score *= max(0.0, min(1.0, (nearest_fwd - 30.0) / 90.0))
+
+            # Texture penalty: blank walls / whiteboards read as open space in
+            # fast_depth but have near-zero Laplacian variance.  Read the current
+            # frame synchronously here so the penalty is not subject to thread
+            # timing (belt-and-suspenders on top of open_space texture gating).
+            try:
+                _scan_img = cv2.imread(str(_CURRENT_FRAME), cv2.IMREAD_GRAYSCALE)
+                if _scan_img is not None:
+                    _sh, _sw = _scan_img.shape
+                    _center_crop = _scan_img[:, _sw // 3: 2 * _sw // 3]
+                    _lap_var = float(cv2.Laplacian(_center_crop, cv2.CV_64F).var())
+                    score *= min(1.0, _lap_var / TEXTURE_MIN_VAR)
+            except Exception:
+                pass
 
             if score > best_score:
                 best_score = score
