@@ -169,19 +169,30 @@ echo "Escaped!" >> /tmp/speak_queue.txt
 
 ---
 
-### Bump recovery (the only reason to capture mid-run)
+### Bump recovery
+
+**Single bumper hit — no capture needed, turn immediately:**
 
 ```bash
 ./scripts/pilot_send.sh "move -20"
+# Left bump:  ./scripts/pilot_send.sh "turn -45"
+# Right bump: ./scripts/pilot_send.sh "turn 45"
+# then resume macro toward exit
+```
+
+You already know which side hit — turn away from it and keep going. Do not take a photo.
+
+**Both bumpers hit — back off and capture once to re-orient:**
+
+```bash
+./scripts/pilot_send.sh "move -30"
 sleep 1
 source ./scripts/capture_frame.sh
 ./scripts/mark_decision.sh
+# turn toward largest visible gap that still leads to the exit, then resume
 ```
 
-- Left bump → `turn -45`, then resume macro toward exit.
-- Right bump → `turn 45`, then resume macro toward exit.
-- Both bumps → back off 30 cm, turn toward largest visible gap that leads to the exit.
-- Doorway bump → back off 15 cm, small 15° correction, shorter move.
+**Doorway bump** — back off 15 cm, `turn 15°` correction away from the bumped side, shorter move. No capture.
 
 ---
 
