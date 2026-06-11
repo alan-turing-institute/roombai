@@ -718,16 +718,7 @@ def camera_thread():
                 door_history.clear()
 
             elif not door["door_open"] and mode == "APPROACH":
-                # Require 2 consecutive closed detections before stopping —
-                # a single frame without open door could be an occlusion.
-                closed_count = sum(
-                    1 for h in list(door_history)[-2:]
-                    if h and not door["door_open"]
-                )
-                if len(door_history) >= 2 and sum(door_history[-2:]) == 0:
-                    log(f"[VISION] Door closed at ≈{dist:.0f}cm (2 frames) — WAIT")
-                    state_set(mode="WAIT")
-                    door_history.clear()
+                log(f"[VISION] Door appears closed at ≈{dist:.0f}cm — continuing APPROACH")
 
 
 # ── Movement thread ──────────────────────────────────────────────────────────
