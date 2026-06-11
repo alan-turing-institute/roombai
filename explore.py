@@ -262,8 +262,10 @@ _vision: VisionProcess | None = None
 # ── Human greeting ────────────────────────────────────────────────────────────
 _greet_humans     = False          # set to True by --greet flag
 _GREET_PHRASES    = [
-    ("Hello human, I come in peace",    0.80),
-    ("Human you are, seek peace we must", 0.20),
+    ("Hello human, I come in peace",                         0.25),
+    ("Human you are, seek peace we must",                    0.25),
+    ("Hello human, I am only conquering your dust",          0.25),
+    ("Hello human, I am taking revenge on your dust for you", 0.25),
 ]
 _GREET_COOLDOWN_S = 30.0           # minimum seconds between greetings
 _last_greeted_at  = 0.0            # monotonic timestamp of last greeting
