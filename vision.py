@@ -30,6 +30,54 @@ _DOOR_YOLO_ONNX  = Path.home() / ".cache" / "door_yolo" / "doors.onnx"
 _door_yolo_session = None
 _DOOR_YOLO_SIZE  = 640
 
+# ── Reference door image (HSV histogram comparison) ──────────────────────────
+# reference_door.jpg is a confirmed image of the target door (wooden panel in
+# glass wall). Used to discriminate the real door from bench/wall false positives.
+_REFERENCE_DOOR_PATH = Path(__file__).parent / "reference_door.jpg"
+_reference_door_hist: np.ndarray | None = None   # cached 2D hue-sat histogram
+
+def _get_reference_door_hist() -> "np.ndarray | None":
+    global _reference_door_hist
+    if _reference_door_hist is not None:
+        return _reference_door_hist
+    if not _REFERENCE_DOOR_PATH.exists():
+        return None
+    try:
+        img = cv2.imread(str(_REFERENCE_DOOR_PATH))
+        if img is None:
+            return None
+        if img.shape[1] != 640:
+            img = cv2.resize(img, (640, 480))
+        # Crop the wooden door panel region from the reference image.
+        # In frame_232 (640×480): door is at approx x=175-345, y=70-430.
+        door_crop = img[70:430, 175:345]
+        hsv = cv2.cvtColor(door_crop, cv2.COLOR_BGR2HSV)
+        hist = cv2.calcHist([hsv], [0, 1], None, [18, 8], [0, 180, 0, 256])
+        cv2.normalize(hist, hist, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+        _reference_door_hist = hist
+        return hist
+    except Exception:
+        return None
+
+
+def _reference_door_similarity(img_bgr: np.ndarray, lx: int, rx: int) -> float:
+    """
+    Compare the hue-saturation histogram of a gap region to the reference door.
+    Returns 0–1 (1 = identical). Returns 0.5 (neutral) if no reference loaded.
+    """
+    ref = _get_reference_door_hist()
+    if ref is None:
+        return 0.5
+    h, w = img_bgr.shape[:2]
+    gap = img_bgr[:, max(0, lx):min(w, rx)]
+    if gap.size == 0:
+        return 0.5
+    hsv = cv2.cvtColor(gap, cv2.COLOR_BGR2HSV)
+    hist = cv2.calcHist([hsv], [0, 1], None, [18, 8], [0, 180, 0, 256])
+    cv2.normalize(hist, hist, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+    dist = cv2.compareHist(ref, hist, cv2.HISTCMP_BHATTACHARYYA)
+    return float(max(0.0, 1.0 - dist))
+
 # ── Camera intrinsics ─────────────────────────────────────────────────────────
 # IMX708 full-sensor 2304×1296, downscaled to 640×480 for inference.
 # hFOV = 66° → FOCAL_PX = (640/2) / tan(33°) = 492 px  (horizontal axis, correct)
@@ -1229,18 +1277,37 @@ def detect_door_cv(
                 if gap_inv > sur_inv * 0.92:
                     return {**null, "notes": f"rejected: gap not clearly deeper than surroundings ({gap_inv:.2f} vs {sur_inv:.2f})"}
 
+        # Filter 5: pillar darkness check.
+        # Real door has dark glass-wall metal frames as pillars.
+        # Bench panel seams and wall edges are light (cream/wood).
+        _pw = 10
+        lp_mean = float(gray[:, max(0, lx - _pw):max(0, lx)].mean()) if lx >= _pw else 128.0
+        rp_mean = float(gray[:, min(w, rx):min(w, rx + _pw)].mean()) if rx + _pw <= w else 128.0
+        pillar_brightness = (lp_mean + rp_mean) / 2.0
+        if pillar_brightness > 160:
+            return {**null, "notes": f"rejected: pillars too bright ({pillar_brightness:.0f}) — bench/wall seam, not glass frame"}
+
+        # Filter 6: reference door similarity.
+        # Compare gap region HSV histogram to the reference door photo.
+        # Rejects false positives (bench panels, lockers) that look spectrally
+        # very different from the real wooden door + corridor.
+        ref_sim = _reference_door_similarity(img_bgr, lx, rx)
+        if ref_sim < 0.20:
+            return {**null, "notes": f"rejected: gap dissimilar to reference door (sim={ref_sim:.2f})"}
+
         pos        = ("left"   if center_x < w / 3
                        else "right" if center_x > 2 * w / 3
                        else "center")
         in_doorway = lx < w * 0.18 and rx > w * 0.82
-        door_open  = bright_r >= 0.82
+        # Lowered from 0.82 — glass wall attenuates brightness ratio to ~0.60-0.65
+        door_open  = bright_r >= 0.55
         door_dist  = round(scene_depth_cm, 1) if gap_real_cm is not None and scene_depth_cm else \
                      round(DOOR_WIDTH_CM * FOCAL_PX / gap, 1) if gap > 0 else None
 
-        confidence = min(1.0, best_score / 500.0)
+        confidence = min(1.0, best_score / 500.0 * (0.6 + 0.4 * ref_sim))
         notes = (
             f"gap={gap}px dist≈{door_dist}cm real_w≈{gap_real_cm}cm pos={pos} "
-            f"bright={bright_r:.2f} edge={edge_dens:.2f}"
+            f"bright={bright_r:.2f} edge={edge_dens:.2f} ref_sim={ref_sim:.2f}"
         )
         return {
             "door_visible":     True,

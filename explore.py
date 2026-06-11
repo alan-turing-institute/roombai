@@ -103,8 +103,9 @@ _state: dict = {
     "bumps":           0,
     "frames_captured": 0,
     "last_detection":  [],     # list of detection dicts from run_yolo()
-    "last_door":       None,
-    "door_bearing":    None,
+    "last_door":           None,
+    "last_door_dist_cm":   9999.0,   # persists last real detection distance
+    "door_bearing":        None,
     "scene_depth_cm":  None,
     "stuck":           False,
     # Obstacle map — updated every frame by camera thread
@@ -633,6 +634,8 @@ def camera_thread():
                 door.get("door_open", False),
             )
             dist = door.get("door_distance_cm")
+            if dist is not None:
+                state_set(last_door_dist_cm=float(dist))
             log(
                 f"[DOOR] frame {frame_num}: {door['notes']} "
                 f"dist≈{dist}cm conf={door['confidence']:.2f} "
@@ -732,6 +735,7 @@ def mover_thread():
     _default_turn_sign = -1    # -1=CW, +1=CCW; flips each time it's used with no depth preference
     _bump_streak       = 0     # consecutive bumps in EXPLORE without a clean drive
     _wall_follow       = False # right-hand wall following active
+    _last_known_door_dist = 9999.0  # last distance when door was actually detected
 
     _FORWARD_SEG_S = 0.3   # seconds per forward segment for bump-interruptible driving
 
@@ -1234,7 +1238,7 @@ def mover_thread():
                     and last_door_now.get("confidence", 0) >= DOOR_CONFIRM_MIN_CONF
                 )
 
-                last_door_dist = (state_get("last_door") or {}).get("door_distance_cm") or 9999
+                last_door_dist = state_get("last_door_dist_cm")   # persists across frames with no detection
                 door_close = last_door_dist < 250
 
                 if door_currently_visible or door_close:
