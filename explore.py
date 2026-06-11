@@ -961,18 +961,18 @@ def mover_thread():
             if _scan_wait():
                 break
 
-            # Score this heading: depth open-space, penalised by legs and map obstacles.
+            # Score this heading: depth open-space, penalised by map obstacles.
             # open_space is already texture-gated inside _open_space_from_depth
             # (each third is multiplied by min(1, lap_var/TEXTURE_MIN_VAR)).
             # Do NOT apply a second texture penalty here — it double-penalises glass
             # walls and transparent surfaces that look textureless but are passable,
             # causing the scan to reject the door direction (run 13 failure).
+            # Do NOT apply the legs penalty here — the leg detector over-triggers on
+            # bench/chair frames and killed 6/8 scan headings in run 14 including the
+            # door direction (135°, raw 0.92 → 0.274). Movement bursts already ignore
+            # it for the same reason (removed in run 11). Bumpers handle actual contact.
             os_ = state_get("open_space") or {}
             score = os_.get("center", 0.0) + 0.5 * (os_.get("left", 0.0) + os_.get("right", 0.0))
-
-            # Legs detected → furniture/narrow gap in this direction.
-            if state_get("legs_blocking"):
-                score *= 0.3
 
             # Known map obstacles ahead → penalise proportionally to proximity.
             map_ahead = map_recorder.obstacles_ahead(
