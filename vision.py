@@ -1158,13 +1158,17 @@ def detect_door_cv(
         if len(clusters) < 2:
             return null
 
+        # At close range one pillar may be off-frame. Add synthetic frame-edge
+        # clusters so a wide door can still be scored against the visible pillar.
+        augmented = clusters + [(0, h), (w, h)]
+
         best: tuple | None = None
         best_score = 0.0
-        for i in range(len(clusters)):
-            for j in range(i + 1, len(clusters)):
-                (lx, lspan), (rx, rspan) = clusters[i], clusters[j]
+        for i in range(len(augmented)):
+            for j in range(i + 1, len(augmented)):
+                (lx, lspan), (rx, rspan) = augmented[i], augmented[j]
                 gap = rx - lx
-                if not (0.20 * w < gap < 0.70 * w):
+                if not (0.20 * w < gap < 0.92 * w):
                     continue
                 if max(lspan, rspan) < h * 0.40:
                     continue
