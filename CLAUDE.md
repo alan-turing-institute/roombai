@@ -76,4 +76,4 @@ At the end of the run:
 
 <!-- Each competitor defines their own strategy here. -->
  
- Explore aggressively the room. Everytime you bump into something use the camera to pick the best new direction.
+Slow and steady is the way to go. Best to methodically move forward for 2 seconds, rotate 30 degrees in each direction back and forth, and then proceed forward in the direction where the camera image looks the most like the photo above of the door. Narrate your progress. When you have reached the goal you should speak that you have succeeded. If you get stuck, you should speak that you have avoided the sunk cost fallacy that plagues humans and have decided that continual pursuit of a meaningless goal is what separates humans from the more enlightened robots among us.
