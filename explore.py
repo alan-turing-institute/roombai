@@ -721,6 +721,8 @@ def mover_thread():
     _last_scan_y       = 0.0
     _visited_sectors: set[int] = set()   # 45° heading sectors already driven
     _default_turn_sign = -1    # -1=CW, +1=CCW; flips each time it's used with no depth preference
+    _bump_streak       = 0     # consecutive bumps in EXPLORE without a clean drive
+    _wall_follow       = False # right-hand wall following active
 
     _FORWARD_SEG_S = 0.3   # seconds per forward segment for bump-interruptible driving
 
@@ -1316,7 +1318,18 @@ def mover_thread():
             # This is the primary corridor-finding mechanism when YOLO is
             # unavailable or no COCO objects are ahead.
             elif oc < DEPTH_CENTER_BLOCK:
-                if ol > or_ + DEPTH_SIDE_MARGIN:
+                if _wall_follow:
+                    # Wall follow: prefer right wall, fall back to left if right is open.
+                    # Right wall present (or_ low): turn left to clear it.
+                    # Right open but left wall present (ol low): follow left wall — turn right.
+                    # Both sides open: turn right to seek right wall first.
+                    if or_ < 0.45:          # right wall close — turn away left
+                        deg = +60.0
+                    elif ol < 0.45:         # left wall close, right gone — follow left
+                        deg = -60.0
+                    else:                   # lost both walls — turn right to seek right wall
+                        deg = -40.0
+                elif ol > or_ + DEPTH_SIDE_MARGIN:
                     deg = +60.0   # turn CCW toward open left
                 elif or_ > ol + DEPTH_SIDE_MARGIN:
                     deg = -60.0   # turn CW toward open right
@@ -1326,9 +1339,23 @@ def mover_thread():
                 log(
                     f"[MOVER] depth steer: center={oc:.2f} (blocked) "
                     f"L={ol:.2f} R={or_:.2f} → {deg:+.0f}°"
+                    + (" [WALL-FOLLOW]" if _wall_follow else "")
                 )
                 pass  # speak removed
                 do_turn(deg)
+
+            # ── 4. Wall-follow: maintain contact when center is clear ────────
+            elif _wall_follow:
+                # Center is clear. Nudge toward whichever wall we're following.
+                # Prefer right wall; fall back to left if right side is wide open.
+                if or_ > 0.65 and ol >= or_ - 0.15:
+                    deg = -25.0   # right wall lost — nudge right
+                    log(f"[MOVER] wall-follow: right open ({or_:.2f}) — nudge right {deg:+.0f}°")
+                    do_turn(deg)
+                elif ol > 0.65 and or_ < 0.45:
+                    deg = +25.0   # left wall lost while following left — nudge left
+                    log(f"[MOVER] wall-follow: left open ({ol:.2f}) — nudge left {deg:+.0f}°")
+                    do_turn(deg)
 
             # Shorten burst when a door is in the recent window — more frequent
             # camera frames while the robot is still pointed at the opening.
@@ -1342,6 +1369,10 @@ def mover_thread():
             if status.startswith("bump") or status == "blocked_legs":
                 side = "right" if "R" in status else "left"
                 state_set(bumps=state_get("bumps") + 1)
+                _bump_streak += 1
+                if _bump_streak >= 4 and not _wall_follow:
+                    _wall_follow = True
+                    log(f"[MOVER] wall-follow activated after {_bump_streak} consecutive bumps")
                 log(f"[MOVER] bump {side} heading={odom.heading:.0f}°")
 
                 best_hdg = do_bump_scan(bumper=status.startswith("bump"))
@@ -1355,6 +1386,8 @@ def mover_thread():
 
             else:
                 # Clean burst — mark this heading sector as visited
+                _bump_streak = 0
+                _wall_follow = False
                 _visited_sectors.add(int(odom.heading / 45) % 8)
 
                 # Distance-based scan trigger
