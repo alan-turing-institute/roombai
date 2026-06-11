@@ -93,6 +93,56 @@ def turn(degrees: float) -> None:
     stop()
 
 
+def steer_forward(
+    direction: "Literal['left', 'straight', 'right']",
+    metres: float,
+) -> None:
+    """Drive forward with a fixed steering lock.
+
+    Sets the front wheels to full left, straight, or full right before
+    driving, then stops and straightens on completion.
+    """
+    if direction == "left":
+        _fw.turn_left()
+    elif direction == "right":
+        _fw.turn_right()
+    else:
+        _fw.turn_straight()
+    duration = (metres * 100) / FORWARD_CM_PER_SEC
+    _bw.speed = SPEED
+    _bw.forward()
+    time.sleep(duration)
+    stop()
+
+
+def steer_backward(
+    direction: "Literal['left', 'straight', 'right']",
+    metres: float,
+) -> None:
+    """Reverse with a fixed steering lock.
+
+    Sets the front wheels to full left, straight, or full right before
+    reversing, then stops and straightens on completion.
+
+    Note on arc direction: when reversing, the rear of the car arcs in the
+    same direction as the steering lock.  'right' arcs the rear rightward
+    (front swings left), which is the correct exit manoeuvre when an obstacle
+    is on the right.  Conversely 'left' arcs the rear leftward (front swings
+    right) to clear a left-side obstacle.
+    """
+    if direction == "left":
+        _fw.turn_left()
+    elif direction == "right":
+        _fw.turn_right()
+    else:
+        _fw.turn_straight()
+    duration = (metres * 100) / FORWARD_CM_PER_SEC
+    _bw.speed = SPEED
+    _bw.backward()
+    time.sleep(duration)
+    stop()
+
+
 def snapshot() -> str:
     """Fetch a JPEG from mjpg-streamer and return it as a base64 string."""
     response = requests.get(SNAPSHOT_URL, timeout=5)
