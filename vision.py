@@ -87,6 +87,12 @@ class ObstacleMemory:
     def __init__(self) -> None:
         self._obs: list[dict] = []
         self._lock = threading.Lock()
+        self._blind_spot_cm: float = BLIND_SPOT_CM  # updated each frame from y_horizon
+
+    def set_blind_spot(self, cm: float) -> None:
+        """Update the blind-spot distance (called by the camera thread each frame)."""
+        with self._lock:
+            self._blind_spot_cm = max(5.0, min(400.0, cm))
 
     def add(self, class_name: str, distance_cm: float, lateral_cm: float,
             conf: float = 1.0) -> None:
@@ -164,7 +170,7 @@ class ObstacleMemory:
         nearest_cm: float | None = None
         in_blind: list[dict] = []
 
-        concern_dist = BLIND_SPOT_CM + MEMORY_SAFETY_CM
+        concern_dist = self._blind_spot_cm + MEMORY_SAFETY_CM
         robot_half   = ROBOT_WIDTH_CM / 2.0
 
         with self._lock:
@@ -693,7 +699,8 @@ def _update_horizon(img_bgr: np.ndarray) -> float:
                 + _HORIZON_EMA_ALPHA * est
             )
     base = _y_horizon_ema if _y_horizon_ema is not None else h / 2.0
-    return float(np.clip(base, h * 0.25, h * 0.75))
+    # Wide clamp [10 %, 90 %] supports camera tilts up to ~20° in either direction.
+    return float(np.clip(base, h * 0.10, h * 0.90))
 
 
 def _floor_texture_depth(img_bgr: np.ndarray, y_horizon: float) -> float | None:
@@ -1222,7 +1229,15 @@ def detect_thin_legs(
     legs     list  x-centre fractions of detected leg clusters (for logging)
     """
     h, w = img_bgr.shape[:2]
-    floor_top = int(h * (1.0 - LEG_FLOOR_FRAC))
+    # With a tilted camera the floor occupies less of the bottom of the frame.
+    # Cap the search zone to (floor_height + 8 % margin), so we don't look for
+    # legs in wall/ceiling area when the camera is pointed upward.
+    if y_horizon > 0:
+        floor_frac = min(LEG_FLOOR_FRAC, (h - y_horizon) / h + 0.08)
+        floor_frac = max(0.12, floor_frac)
+    else:
+        floor_frac = LEG_FLOOR_FRAC
+    floor_top = int(h * (1.0 - floor_frac))
     roi = img_bgr[floor_top:, :]
     roi_h = roi.shape[0]
 
@@ -1448,7 +1463,15 @@ def analyze_scene(
         else {"left": 0.0, "center": 0.0, "right": 0.0}
     )
 
-    # 6. Door detection — OpenCV geometry + YOLO panel, fused
+    # 6. Camera tilt — derived from y_horizon every frame.
+    # Formula: tan(tilt) = (y_horizon - orig_h/2) / FOCAL_PX_V
+    # Positive tilt = camera pointed above horizontal.
+    tilt_deg = round(math.degrees(math.atan2(y_horizon - orig_h / 2.0, FOCAL_PX_V)), 1)
+    # Closest floor point visible at the bottom pixel — grows with upward tilt.
+    dy_bottom = max(1.0, orig_h - y_horizon)
+    blind_spot_cm = round(CAMERA_HEIGHT_CM * FOCAL_PX_V / dy_bottom, 1)
+
+    # 7. Door detection — OpenCV geometry + YOLO panel, fused
     cv_door    = detect_door_cv(img_bgr, scene_depth_cm=scene_depth_cm, depth_map=depth_map)
     yolo_doors = _infer_door_yolo(img_bgr)
     door       = _fuse_door_detections(cv_door, yolo_doors, orig_w)
@@ -1465,6 +1488,8 @@ def analyze_scene(
         "stuck":          stuck,
         "y_horizon":      y_horizon,
         "legs_blocking":  legs_blocking,
+        "tilt_deg":       tilt_deg,
+        "blind_spot_cm":  blind_spot_cm,
     }
 
 

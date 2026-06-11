@@ -483,6 +483,18 @@ def camera_thread():
         prev_img  = curr_img
         prev_odom = curr_odom
 
+        # ── Camera tilt + blind spot (updated every frame from y_horizon) ────
+        tilt_deg      = scene.get("tilt_deg", 0.0)
+        blind_spot_cm = scene.get("blind_spot_cm")
+        if blind_spot_cm is not None:
+            obstacle_memory.set_blind_spot(blind_spot_cm)
+        if frame_num % 20 == 0:   # log every ~20 frames (~10 s at 0.5 s/frame)
+            log(
+                f"[TILT] frame {frame_num}: tilt={tilt_deg:.1f}° "
+                f"blind_spot={blind_spot_cm:.0f}cm "
+                f"y_horizon={scene.get('y_horizon', '?'):.0f}px"
+            )
+
         # ── Optical flow / stuck ──────────────────────────────────────────
         scene_depth = scene["scene_depth_cm"]
         stuck       = scene["stuck"]
