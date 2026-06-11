@@ -1210,7 +1210,7 @@ def detect_door_cv(
         gap_real_cm: float | None = None
         if scene_depth_cm is not None and scene_depth_cm > 0:
             gap_real_cm = round(gap * scene_depth_cm / FOCAL_PX, 1)
-            if not (ROBOT_WIDTH_CM < gap_real_cm < 150):
+            if not (ROBOT_WIDTH_CM < gap_real_cm < 120):
                 return {**null, "notes": f"rejected: gap real width {gap_real_cm:.0f} cm (not door-sized)"}
 
         # Filter 4: fast_depth — gap should be further (lower inv-depth) than surroundings
@@ -1223,9 +1223,11 @@ def detect_door_cv(
             if gslice.size > 0 and lslice.size + rslice.size > 0:
                 gap_inv = float(gslice.mean())
                 sur_inv = float(np.concatenate([lslice.ravel(), rslice.ravel()]).mean())
-                # gap_inv should be LOWER (further away) than surroundings
-                if gap_inv > sur_inv * 1.10:
-                    return {**null, "notes": "rejected: depth map shows gap not deeper than surroundings"}
+                # gap_inv must be clearly LOWER (further away) than surroundings.
+                # Bench panels, walls, shelves sit at the same depth as their
+                # surroundings (ratio ≈ 1.0).  A real door opening is deeper.
+                if gap_inv > sur_inv * 0.92:
+                    return {**null, "notes": f"rejected: gap not clearly deeper than surroundings ({gap_inv:.2f} vs {sur_inv:.2f})"}
 
         pos        = ("left"   if center_x < w / 3
                        else "right" if center_x > 2 * w / 3
