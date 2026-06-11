@@ -5,7 +5,9 @@
 You are controlling a Roomba cleaning robot. A camera is mounted on it.
 The task is to escape the room via the door in the picture below as fast as possible. You have maximum ten minutes.
 
-<img width="1200" height="1600" alt="WhatsApp Image 2026-06-09 at 11 40 31" src="https://github.com/user-attachments/assets/804b6888-55b2-4210-97f1-70847406afba" />
+<img width="1200" height="1600" alt="Door reference" src="./door_reference.jpg" />
+
+> **Read this image before every run.** It shows the actual room and the exit opening. The exit is the floor-level gap to the **LEFT of the large wooden board/panel** — not the board itself, not the wooden door with the lever handle. Look for where the carpet continues through into the next space.
 
 ---
 
@@ -166,13 +168,33 @@ The loop:
 
 ### Phase 1 — Orient (target < 30 s)
 
+**Step 0 — study the reference image before touching the robot:**
+```bash
+# Read the reference image into your context NOW, before capturing any live frame
+Read("./door_reference.jpg")
+```
+Look at it carefully. Identify:
+- The large wooden board/panel and the **glass partition** — the exit is the **open carpet gap between them**
+- The lever-handle wooden door — memorise its appearance so you can **ignore it** during the run
+- The rough layout: which wall the exit is on, what is to its left and right
+
+You now have a mental map of the room. Every live frame you capture should be matched against this reference.
+
+**Step 1 — enter SAFE mode and capture the first live frame:**
 - Enter SAFE mode.
-- Capture first frame; locate door opening and estimate Roomba heading.
-- **If the first frame does not show the full room** (e.g. robot is facing a wall or corner), back off 30 cm and do a `turn 180` before recapturing — do not waste frames on close-up wall shots.
-- **If no obvious door opening is visible from the first usable frame**, do a deliberate 360° survey: issue four `turn 90` commands, capturing a frame after each, before committing to any direction. Do this once at the start — do not repeat it mid-run.
-- Once the door is located: pick a target point at the centre of the doorway, biased slightly toward the wider-clearance side if obstacles crowd the centreline.
-- Compute angle delta to face that target.
-- Issue a single `turn <deg>` to align (+CCW / -CW). If the estimate is uncertain by > 20°, still make the best turn estimate and continue; do not spend multiple frames perfecting orientation unless the first frame is unusable.
+- Capture first frame.
+- **If it does not show the full room** (e.g. facing a wall or corner), back off 30 cm and `turn 180` before recapturing.
+- **If no exit gap is visible from the first usable frame**, do a 360° survey: four `turn 90` commands with a capture after each. Do this once only.
+
+**Step 2 — identify the exit gap, not the lever door:**
+- Find the carpet gap **between the wooden board and the glass partition** — that is your target.
+- Ignore the lever-handle door. Ignore glass walls. Ignore server racks.
+- If you are unsure, compare against `door_reference.jpg`.
+
+**Step 3 — align and go:**
+- Compute the angle delta to face the exit gap centreline.
+- Issue a single `turn <deg>` to align.
+- Immediately chain all move commands to the door — do not stop again unless a bumper fires.
 
 ### Phase 2 — Drive to door (bulk of run)
 
@@ -188,11 +210,25 @@ Do not capture between these commands. Do not stop to check heading. If the room
 
 If an obstacle is visible in the orient frame, pick the wider gap side, chain: `turn <skirt angle>` → `move <clear distance>` → `turn <re-aim angle>` → `move <remaining distance>`. Do all of this without capturing.
 
+### Identifying the exit — read this before every run
+
+**The exit is NOT the wooden door with the lever handle.** That door is closed and latched — it cannot be pushed open by the Roomba. Do not approach it.
+
+**The exit IS the floor-level gap between the large wooden board/panel and the glass partition.** Carpet continues through it into the next space. It looks like an open corridor opening — no handle, no frame to push, just open floor.
+
+How to tell them apart when analysing a frame:
+- **Lever-handle wooden door** = reject. It is a dead end.
+- **Dark rectangular gap at floor level with carpet visible beyond it** = this is the exit. Go through it.
+- **Glass partition / glass wall** = solid, not passable.
+- **Server rack or black equipment beside a wall** = not an opening, just furniture.
+
+If you are unsure which feature is the exit, look at the **reference image** (`./door_reference.jpg`) — it shows the exact room layout with the exit gap marked.
+
 ### Phase 3 — Thread the door (last ~1 m, no stops)
 
 - **Do not capture.** You already know where the door is. Keep moving.
-- **The exit opening is to the LEFT of the wooden board/panel** — the board itself is a wall, not a door. The passable gap is the floor-level opening immediately to the left of it, where the carpet continues through. Do not target the board face; target the gap beside it.
-- More generally: the exit may not look like a traditional hinged door. Look for any floor-level gap or opening next to a wall feature — the passable route is wherever the floor continues unobstructed into the next space. If you see a large flat panel (wood, board, partition), always check both sides before concluding the wall is solid.
+- Target the **floor-level carpet gap to the LEFT of the wooden board** — not the lever-handle door, not the glass wall.
+- Align to the gap centreline. At the threshold, being centred matters more than being perfectly square.
 - Align to the door centreline. At the threshold, being centred matters more than being perfectly square.
 - Use short, deliberate moves, but do not stop between them if the first threshold push is clean:
 
