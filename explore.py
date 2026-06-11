@@ -809,12 +809,22 @@ def mover_thread():
         rock_cm   = SCAN_ROCK_CM
         rock_secs = rock_cm / MOVE_SPEED
 
+        best_heading: float | None = None
+        best_score = -1.0
+
         for _ in range(8):
             if state_get("mode") in ("APPROACH", "STOP"):
                 break
 
             do_turn(-45)
             time.sleep(SCAN_WAIT_S)   # wait for a fresh frame at this heading
+
+            # Track the heading with the most open space across all 8 positions.
+            os_ = state_get("open_space") or {}
+            score = os_.get("center", 0.0) + 0.5 * (os_.get("left", 0.0) + os_.get("right", 0.0))
+            if score > best_score:
+                best_score = score
+                best_heading = odom.heading
 
             if not use_rock:
                 continue   # fast_depth already gave open_space for this heading
@@ -824,6 +834,8 @@ def mover_thread():
             time.sleep(SCAN_WAIT_S)   # frame B: flow A→B gives depth at H
             # skip_check=True — we just drove that path, it's clear
             do_reverse_safe(rock_cm, skip_check=True)
+
+        return best_heading
 
     def choose_avoid_turn(map_obs: list | None = None) -> float:
         """
@@ -903,10 +915,19 @@ def mover_thread():
         time.sleep(0.2)
     log(f"[MOVER] first frame ready: depth={state_get('scene_depth_cm')}cm "
         f"frames={state_get('frames_captured')}")
-    do_scan_360()
+    best_hdg = do_scan_360()
     _last_scan_x, _last_scan_y = odom.x, odom.y
 
     if state_get("mode") not in ("APPROACH", "STOP"):
+        # Steer toward the most open heading seen during the scan rather than
+        # starting in a random direction — especially useful when surrounded
+        # by furniture at the start position.
+        if best_hdg is not None:
+            delta = (best_hdg - odom.heading + 180) % 360 - 180
+            if abs(delta) > 10:
+                log(f"[MOVER] post-scan: turning {delta:+.0f}° toward best open heading {best_hdg:.0f}°")
+                speak("Steering toward most open direction.")
+                do_turn(delta)
         log("[MOVER] startup: scan done — beginning exploration")
         speak("Scan complete. Exploring.")
 
@@ -1162,19 +1183,29 @@ def mover_thread():
 
                 if _corner_bump_count >= CORNER_ESCAPE_BUMPS:
                     # ── Corner escape ─────────────────────────────────────
-                    # No progress in CORNER_ESCAPE_BUMPS bumps — we're trapped.
-                    # Extra reverse + large turn in the opposite of the last
-                    # default direction, then drive forward to leave the corner.
-                    escape_deg = 150.0 * (-_default_turn_sign)
+                    # No progress in CORNER_ESCAPE_BUMPS bumps — trapped.
+                    # Use depth signal to pick escape direction; if no clear
+                    # preference, alternate CW/CCW. Drive 100 cm to actually
+                    # clear dense furniture (was 60 cm, often not enough).
+                    os_esc = state_get("open_space") or {}
+                    ol_esc = os_esc.get("left",  0.0)
+                    or_esc = os_esc.get("right", 0.0)
+                    if ol_esc > or_esc + DEPTH_SIDE_MARGIN:
+                        escape_deg = +150.0
+                    elif or_esc > ol_esc + DEPTH_SIDE_MARGIN:
+                        escape_deg = -150.0
+                    else:
+                        escape_deg = 150.0 * (-_default_turn_sign)
+                        _default_turn_sign *= -1
                     log(
                         f"[MOVER] CORNER ESCAPE: {_corner_bump_count} bumps, "
-                        f"{displacement:.0f}cm from ref → {escape_deg:+.0f}°"
+                        f"{displacement:.0f}cm from ref → {escape_deg:+.0f}° "
+                        f"(depth L={ol_esc:.2f} R={or_esc:.2f})"
                     )
                     speak("Stuck in corner. Escaping.")
-                    do_reverse_safe(20, skip_check=True)   # 60 cm total
+                    do_reverse_safe(20, skip_check=True)
                     do_turn(escape_deg)
-                    do_forward(MOVE_SPEED, 60.0 / MOVE_SPEED)   # drive 60 cm clear
-                    _default_turn_sign *= -1
+                    do_forward(MOVE_SPEED, 100.0 / MOVE_SPEED)   # drive 100 cm clear
                     _corner_bump_count  = 0
                     _corner_ref_x, _corner_ref_y = odom.x, odom.y
                 else:
@@ -1297,10 +1328,11 @@ def main():
         log("Cannot reach pilot daemon — is it running?")
         sys.exit(1)
 
-    if not STRATEGY_FILE.exists():
-        STRATEGY_FILE.write_text(json.dumps({
-            "mode": "EXPLORE", "door_bearing": None, "notes": "initial"
-        }, indent=2))
+    # Always overwrite — a stale strategy file from a previous run could carry a
+    # door_bearing that's wrong for this run's starting position/layout.
+    STRATEGY_FILE.write_text(json.dumps({
+        "mode": "EXPLORE", "door_bearing": None, "notes": "fresh start"
+    }, indent=2))
 
     # ── Spawn vision child process (loads models; logs loaded/missing itself) ──
     # Models are loaded inside the child so the main process never touches the

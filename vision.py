@@ -57,9 +57,11 @@ LEG_MAX_DIST_CM   = 200.0   # don't block navigation for legs further than this
 LEG_NO_DIST_BLOCK_CM = 80.0 # assumed distance when no depth estimate available
 STUCK_BASELINE_CM = 20.0
 STUCK_FLOW_PX     = 3.0
-TEXTURE_MIN_VAR   = 80.0   # Laplacian variance below which a region is treated as textureless
+TEXTURE_MIN_VAR   = 50.0   # Laplacian variance below which a region is treated as textureless
                             # (blank wall / whiteboard). open_space is scaled by var/TEXTURE_MIN_VAR
-                            # so a wall with var=15 gives confidence≈0.19, suppressing false "open".
+                            # so a wall with var=10 gives confidence≈0.20, suppressing false "open".
+                            # Lowered from 80→50: var≈40 (corridor floor) now gets confidence≈0.80
+                            # instead of 0.50, reducing over-suppression of real open space.
 
 # ── Blind-spot / obstacle memory constants ────────────────────────────────────
 BLIND_SPOT_CM     = 43.0   # closest floor point visible from camera (horizontal, 20cm height)
