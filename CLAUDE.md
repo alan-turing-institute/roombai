@@ -77,7 +77,7 @@ At the end of the run:
 The strategy combines the RL model (fast, covers open ground quickly) with camera-based
 decisions (slow, but sees real obstacles). The RL model navigates in short bursts; when
 it gets stuck on furniture or people, Claude takes over with the camera to escape, then
-hands back to RL.
+hands back to RL. If the RL has completed, but the objective hasn't been reached, restart it.
 
 **Known limitation:** the RL model was trained on the static room map and cannot see
 furniture, chairs, or people. It will reach the door area efficiently in a clear room but
@@ -108,31 +108,9 @@ If `uv` still isn't found after the install, try: `export PATH="$HOME/.local/bin
 
 ---
 
-### Step 2 — Capture frame and determine start heading
+### Step 2 — Run the RL agent
 
-```bash
-echo "Starting combined RL and camera escape strategy" >> /tmp/speak_queue.txt
-source ./scripts/capture_frame.sh
-```
-
-Look at the captured frame. Find the door: it appears as an open gap or doorway in the wall.
-
-Estimate where the door appears relative to the centre of the image, then choose `--start-heading`:
-
-| Door position in frame | `--start-heading` |
-|---|---|
-| Door directly ahead (centred) | 200 |
-| Door ahead and to the left (~45°) | 230 |
-| Door to the far left (~90°) | 290 |
-| Door not visible — behind you | Spin first: `./roomba_pilot/target/debug/pilot send "turn 90"` then re-capture |
-
-Value 200 was empirically confirmed correct in a previous real run when the door was centred.
-
----
-
-### Step 3 — RL burst (first attempt)
-
-Run the RL agent for a short burst. It will cover open ground quickly.
+Run the RL agent. It will cover open ground quickly.
 
 ```bash
 cd agents && uv run run_agent_real.py models/best/best_model.zip \
@@ -147,7 +125,7 @@ cd ..
 
 ---
 
-### Step 4 — Assess RL run and decide next action
+### Step 3 — Assess RL run and decide next action
 
 ```bash
 BUMPS=$(grep -c "BUMPED" /tmp/rl_run.log || true)
