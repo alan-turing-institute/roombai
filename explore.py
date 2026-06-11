@@ -898,17 +898,21 @@ def mover_thread():
         # changing mode — let the scan run fully to collect the updated bearing.
         _scan_start_mode = state_get("mode")
 
-        def _scan_wait(secs: float) -> bool:
-            """Wait up to secs; True if a relevant mode change occurred."""
-            deadline = time.monotonic() + secs
+        def _scan_wait(timeout: float = 5.0) -> bool:
+            """Wait until a fresh stationary photo has been captured and analysed
+            (signalled by _rest_photo_ready), up to timeout seconds.
+            Returns True if a relevant mode change occurred (scan should abort)."""
+            deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 m = state_get("mode")
                 if m == "STOP":
                     return True
                 if m == "APPROACH" and _scan_start_mode != "APPROACH":
                     return True
+                if _rest_photo_ready.is_set():
+                    return False
                 time.sleep(0.2)
-            return False
+            return False   # timeout — proceed with stale data
 
         for _ in range(8):
             if state_get("mode") == "STOP":
@@ -917,7 +921,9 @@ def mover_thread():
                 break
 
             do_turn(-45)
-            if _scan_wait(SCAN_WAIT_S):   # door detected mid-wait → abort scan
+            # do_turn() clears _rest_photo_ready; wait until the camera thread
+            # delivers a fresh photo taken while the robot is fully stopped.
+            if _scan_wait():
                 break
 
             # Score this heading: depth open-space, penalised by legs and map obstacles.
@@ -950,6 +956,18 @@ def mover_thread():
             except Exception:
                 pass
 
+            # Door detection bonus: strongly prefer headings where door is visible.
+            door_state = state_get("last_door") or {}
+            if door_state.get("door_visible") and door_state.get("confidence", 0) >= DOOR_CONFIRM_MIN_CONF:
+                d_open = door_state.get("door_open", False)
+                d_dist = door_state.get("door_distance_cm") or 9999
+                log(
+                    f"[MOVER] SCAN: door {'open' if d_open else 'closed'} at "
+                    f"~{odom.heading:.0f}° dist≈{d_dist:.0f}cm "
+                    f"conf={door_state.get('confidence', 0):.2f}"
+                )
+                score += 5.0 if d_open else 2.0
+
             if score > best_score:
                 best_score = score
                 best_heading = odom.heading
@@ -959,11 +977,11 @@ def mover_thread():
 
             # Optical-flow fallback: rock forward and return for flow depth.
             do_forward(MOVE_SPEED, rock_secs)
-            interrupted = _scan_wait(SCAN_WAIT_S)   # frame B: flow A→B gives depth at H
-            # Always reverse first — keeps odometry correct even on interrupt
-            do_reverse_safe(rock_cm, skip_check=True)
-            if interrupted:
+            if _scan_wait():   # wait for stationary frame B: flow A→B gives depth at H
+                do_reverse_safe(rock_cm, skip_check=True)
                 break
+            # Always reverse — keeps odometry correct even on interrupt
+            do_reverse_safe(rock_cm, skip_check=True)
 
         return best_heading
 
