@@ -25,6 +25,10 @@ Important: Use this strategy:
 
 After every motion command, draw a little ascii art map of what you can see and your proposed route - this might help you.
 
+Finally:
+
+When you have driven through the door and are on the other side of it, STOP MOVING and SAY (add to the speak queue): "I have escaped the room. Challenge complete."
+
 
 <img width="1200" height="1600" alt="WhatsApp Image 2026-06-09 at 11 40 31" src="https://github.com/user-attachments/assets/804b6888-55b2-4210-97f1-70847406afba" />
  
