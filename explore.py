@@ -656,7 +656,7 @@ def camera_thread():
                 f"[VISION] FAST-TRACK conf={door['confidence']:.2f} open door "
                 f"{pos} at ≈{dist_ft:.0f}cm → APPROACH {bearing:.0f}°"
             )
-            speak(f"High confidence door on the {pos}. Approaching now.")
+            speak("I see the door, see you.")
             state_set(mode="APPROACH", door_bearing=bearing)
             door_history.clear()
 
@@ -684,7 +684,7 @@ def camera_thread():
                 offset  = {"left": 30, "center": 0, "right": -30}.get(pos, 0)
                 bearing = (odom.heading + offset) % 360
                 log(f"[VISION] Open door on {pos} at ≈{dist:.0f}cm → APPROACH bearing={bearing:.0f}°")
-                speak(f"Door on the {pos}, about {int(dist)} centimetres. Approaching.")
+                speak("I see the door, see you.")
                 state_set(mode="APPROACH", door_bearing=bearing)
                 door_history.clear()
 
