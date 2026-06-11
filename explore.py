@@ -82,10 +82,12 @@ MAP_SAVE_INTERVAL = 30         # seconds between periodic map saves
 APPROACH_SLOW_DIST  = 150  # cm — half-speed below this
 APPROACH_STOP_DIST  = 40   # cm — stop and declare arrival
 
-# Proactive avoidance: steer if an obstacle is detected closer than this
-AVOID_STEER_DIST_CM = 120  # cm
-# Map-based avoidance: steer if a known map obstacle is closer than this
-MAP_AVOID_DIST_CM   = 150  # cm  (generous — odometry drifts so cone is wide)
+# Proactive avoidance: steer if an obstacle is detected closer than this.
+# Set to match CHAIR_BLOCK_DIST_CM — allows navigating 60-80 cm corridors
+# alongside chairs without steering away prematurely.
+AVOID_STEER_DIST_CM = 60   # cm  (was 120 — caused 1-1.5 m chair avoidance)
+# Map-based avoidance: steer if a known map obstacle is closer than this.
+MAP_AVOID_DIST_CM   = 60   # cm  (was 150 — prevented corridor entry entirely)
 
 # Depth-based proactive steering thresholds.
 # Center open_space below DEPTH_CENTER_BLOCK → steer before moving.

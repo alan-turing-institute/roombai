@@ -43,9 +43,12 @@ CAMERA_HEIGHT_CM  = 20.0     # camera is ~20 cm off the floor
 ROBOT_WIDTH_CM    = 40.0     # Roomba diameter ≈ 2 × camera height
 OBSTACLE_BLOCK_DIST_CM = 200.0
 # Chair leg detection (thin near-vertical structures in the floor region)
-CHAIR_BBOX_EXPAND = 0.25    # expand detected chair x-extent by this fraction of frame width on each side
-# Classes whose ground footprint must be fully respected regardless of distance.
-# Camera is horizontal so legs/feet may appear at any height — always block.
+# Chairs are only treated as blocking when closer than this — allows the robot
+# to navigate a 60-80 cm corridor with chairs on one side (robot ⌀ 40 cm).
+CHAIR_BLOCK_DIST_CM = 55.0  # cm — robot radius 20 + 35 cm buffer
+CHAIR_BBOX_EXPAND = 0.05    # small margin for localisation uncertainty only
+                             # (was 0.25 — that made one chair block the full frame)
+# Classes whose ground footprint must be respected — but only when close enough.
 FLOOR_BLOCKER_CLASSES = {"chair", "couch", "dining table", "bench"}
 LEG_FLOOR_FRAC    = 0.55    # analyse bottom LEG_FLOOR_FRAC of frame for legs
 LEG_MIN_LENGTH    = 0.22    # min leg segment as fraction of floor-region height
@@ -1024,9 +1027,16 @@ def analyze_obstacles(
         # the frame (upward camera may not capture their feet).
         is_person    = class_name == "person"
         at_floor     = is_floor_obj or is_person or (y2 > floor_threshold)
-        # Floor blockers and persons always block — their legs/feet may be in the
-        # path even if the distance estimate looks large or is absent.
-        within_range = is_floor_obj or is_person or dist is None or dist < OBSTACLE_BLOCK_DIST_CM
+        # Floor objects (chairs etc.) block only when within CHAIR_BLOCK_DIST_CM.
+        # This allows the robot to navigate a narrow corridor alongside chairs
+        # without steering away prematurely.  Persons always block (can't predict
+        # movement).  Leg detection handles under-chair protection at close range.
+        if is_floor_obj:
+            within_range = dist is None or dist < CHAIR_BLOCK_DIST_CM
+        elif is_person:
+            within_range = True
+        else:
+            within_range = dist is None or dist < OBSTACLE_BLOCK_DIST_CM
         blocking     = at_floor and within_range
 
         enriched.append({**det, "blocking": blocking, "distance_cm": dist, "real_height_cm": real_h})
