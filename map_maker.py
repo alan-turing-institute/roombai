@@ -167,6 +167,16 @@ class MapRecorder:
         results.sort(key=lambda t: t[1])
         return results
 
+    def clear_near(self, x: float, y: float, radius_cm: float) -> int:
+        """Remove all events within radius_cm of (x, y). Returns count removed."""
+        with self._lock:
+            before = len(self._events)
+            self._events = [
+                e for e in self._events
+                if math.hypot(e.world_x - x, e.world_y - y) > radius_cm
+            ]
+            return before - len(self._events)
+
     # ── Persistence ───────────────────────────────────────────────────────────
 
     def save_events(self, path: Path = EVENTS_FILE):

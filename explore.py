@@ -74,10 +74,7 @@ DOOR_CONFIRM_MIN_CONF = 0.25   # ignore detections below this confidence
 DOOR_FASTTRACK_CONF = 0.75     # single open-door detection above this → APPROACH immediately
 DOOR_SLOW_BURST     = 1.0      # forward burst (s) when door hit in current window
 
-CORNER_PROGRESS_CM  = 35   # min displacement (cm) between bumps to reset corner counter
-CORNER_ESCAPE_BUMPS = 3    # consecutive stuck bumps before executing corner escape
-SCAN_EVERY_BUMPS = 6           # pause for a 360° scan every N bumps
-SCAN_EVERY_CM    = 500         # also scan every N cm of odometry travel
+SCAN_EVERY_CM    = 500         # scan every N cm of odometry travel (clean drive)
 MAP_SAVE_INTERVAL = 30         # seconds between periodic map saves
 APPROACH_SLOW_DIST  = 150  # cm — half-speed below this
 APPROACH_STOP_DIST  = 40   # cm — stop and declare arrival
@@ -698,18 +695,12 @@ def camera_thread():
 # ── Movement thread ──────────────────────────────────────────────────────────
 def mover_thread():
     moves_since_full   = 0
-    _approach_bumps    = 0
     _approach_turn_deg = 0.0   # cumulative turning since bearing last confirmed visually
     _consecutive_stuck = 0
-    _bumps_since_scan  = 0
     _last_scan_x       = 0.0   # odometry position at the last 360° scan
     _last_scan_y       = 0.0
     _visited_sectors: set[int] = set()   # 45° heading sectors already driven
-    # Corner escape state
     _default_turn_sign = -1    # -1=CW, +1=CCW; flips each time it's used with no depth preference
-    _corner_bump_count = 0     # bumps without CORNER_PROGRESS_CM of displacement
-    _corner_ref_x      = 0.0  # odometry position when the current bump streak began
-    _corner_ref_y      = 0.0
 
     _FORWARD_SEG_S = 0.3   # seconds per forward segment for bump-interruptible driving
 
@@ -872,26 +863,49 @@ def mover_thread():
         best_heading: float | None = None
         best_score = -1.0
 
+        # Capture mode so _scan_wait knows what counts as an interrupt.
+        # When already in APPROACH, door detections update the bearing without
+        # changing mode — let the scan run fully to collect the updated bearing.
+        _scan_start_mode = state_get("mode")
+
         def _scan_wait(secs: float) -> bool:
-            """Wait up to secs seconds; return True if APPROACH/STOP triggered."""
+            """Wait up to secs; True if a relevant mode change occurred."""
             deadline = time.monotonic() + secs
             while time.monotonic() < deadline:
-                if state_get("mode") in ("APPROACH", "STOP"):
+                m = state_get("mode")
+                if m == "STOP":
+                    return True
+                if m == "APPROACH" and _scan_start_mode != "APPROACH":
                     return True
                 time.sleep(0.2)
             return False
 
         for _ in range(8):
-            if state_get("mode") in ("APPROACH", "STOP"):
+            if state_get("mode") == "STOP":
+                break
+            if state_get("mode") == "APPROACH" and _scan_start_mode != "APPROACH":
                 break
 
             do_turn(-45)
             if _scan_wait(SCAN_WAIT_S):   # door detected mid-wait → abort scan
                 break
 
-            # Track the heading with the most open space across all 8 positions.
+            # Score this heading: depth open-space, penalised by legs and map obstacles.
             os_ = state_get("open_space") or {}
             score = os_.get("center", 0.0) + 0.5 * (os_.get("left", 0.0) + os_.get("right", 0.0))
+
+            # Legs detected → furniture/narrow gap in this direction.
+            if state_get("legs_blocking"):
+                score *= 0.3
+
+            # Known map obstacles ahead → penalise proportionally to proximity.
+            map_ahead = map_recorder.obstacles_ahead(
+                odom.x, odom.y, odom.heading, look_dist_cm=120
+            )
+            if map_ahead:
+                nearest_fwd = map_ahead[0][1]
+                score *= max(0.0, min(1.0, (nearest_fwd - 30.0) / 90.0))
+
             if score > best_score:
                 best_score = score
                 best_heading = odom.heading
@@ -970,6 +984,33 @@ def mover_thread():
 
         # No clear preference — alternate CW/CCW
         return 90.0 * _default_turn_sign
+
+    def do_bump_scan() -> float | None:
+        """
+        Post-bump recovery used in both EXPLORE and APPROACH:
+          1. Back up 60 cm (direct command — avoids the two 180° turns of
+             do_reverse_safe which corrupt the odometry heading).
+          2. Do a full 360° scan to find the door or the most open heading.
+             The scan interrupts early if APPROACH is triggered (door found).
+          3. Clear stale map obstacles near current position so bench-area
+             bumps don't misdirect navigation once the robot has escaped.
+        Returns the best open-space heading seen during the scan.
+        """
+        _back_secs = 60.0 / MOVE_SPEED
+        send_cmd(f"back {MOVE_SPEED} {_back_secs:.2f}")
+        time.sleep(_back_secs + 0.2)
+        odom.forward(-MOVE_SPEED, _back_secs)
+        obstacle_memory.update_forward(-60.0)
+        obstacle_memory.clear()
+
+        speak("Scanning for open path.")
+        best_hdg = do_scan_360()
+
+        n_cleared = map_recorder.clear_near(odom.x, odom.y, radius_cm=150)
+        if n_cleared:
+            log(f"[MAP] cleared {n_cleared} stale obstacles within 150 cm after bump scan")
+
+        return best_hdg
 
     speak("Beginning room exploration.")
     log("[MOVER] starting pos=(0,0) heading=0°")
@@ -1070,12 +1111,16 @@ def mover_thread():
             if _approach_turn_deg > 360:
                 log(
                     f"[MOVER] APPROACH: bearing stale ({_approach_turn_deg:.0f}° cumulative "
-                    f"turn without visual lock) — returning to EXPLORE"
+                    f"turn without visual lock) — rescanning before EXPLORE"
                 )
-                speak("Lost the door. Resuming exploration.")
+                speak("Lost the door. Rescanning.")
                 state_set(mode="EXPLORE", door_bearing=None)
-                _approach_bumps    = 0
                 _approach_turn_deg = 0.0
+                best_hdg = do_scan_360()
+                if best_hdg is not None and state_get("mode") not in ("APPROACH", "STOP"):
+                    delta = (best_hdg - odom.heading + 180) % 360 - 180
+                    if abs(delta) > 10:
+                        do_turn(delta)
                 continue
 
             last_door    = state_get("last_door") or {}
@@ -1144,50 +1189,19 @@ def mover_thread():
 
             status, _ = do_forward(speed, burst)
             if status.startswith("bump") or status == "blocked_legs":
-                bump_R = "R" in status
-                _approach_bumps += 1
-                log(f"[MOVER] APPROACH: {status} ({_approach_bumps})")
-                # Back up directly without turning — do_reverse_safe uses two
-                # 180° turns which corrupt the odometry heading and caused the
-                # robot to end up pointing 180° away from the door.
-                _back_secs = 40.0 / MOVE_SPEED
-                send_cmd(f"back {MOVE_SPEED} {_back_secs:.2f}")
-                time.sleep(_back_secs + 0.2)
-                odom.forward(-MOVE_SPEED, _back_secs)
-                obstacle_memory.update_forward(-40.0)
+                state_set(bumps=state_get("bumps") + 1)
+                log(f"[MOVER] APPROACH: {status}")
 
-                if _approach_bumps >= 3:
-                    # Can't drive straight to door — sidestep around obstacle
-                    # cluster while keeping the door bearing in mind.
-                    # Do NOT go back to EXPLORE; maintain APPROACH mode.
-                    door_bearing_now = state_get("door_bearing")
-                    os_now  = state_get("open_space") or {}
-                    ol_now  = os_now.get("left",  0.0)
-                    or_now  = os_now.get("right", 0.0)
-                    if ol_now > or_now + DEPTH_SIDE_MARGIN:
-                        side_deg, side_str = +90.0, "left"
-                    elif or_now > ol_now + DEPTH_SIDE_MARGIN:
-                        side_deg, side_str = -90.0, "right"
-                    else:
-                        side_deg = 90.0 * _default_turn_sign
-                        _default_turn_sign *= -1
-                        side_str = "left" if side_deg > 0 else "right"
-                    log(
-                        f"[MOVER] APPROACH: detour {side_str} "
-                        f"(bearing {door_bearing_now}° preserved)"
-                    )
-                    speak(f"Obstacle cluster. Detouring {side_str}.")
-                    do_turn(side_deg)
-                    do_forward(MOVE_SPEED, 80.0 / MOVE_SPEED)
-                    # Re-orient toward door after sidestep
-                    if door_bearing_now is not None:
-                        delta_back = (door_bearing_now - odom.heading + 180) % 360 - 180
-                        if abs(delta_back) > 10:
-                            do_turn(delta_back)
-                    _approach_bumps = 0
-                else:
-                    # Small correction turn while still trying straight approach
-                    do_turn(45 if bump_R else -45)
+                prev_bearing = state_get("door_bearing")
+                do_bump_scan()
+
+                # Re-orient toward bearing (updated if door found in scan, else previous).
+                cur_bearing = state_get("door_bearing") or prev_bearing
+                if cur_bearing is not None and state_get("mode") == "APPROACH":
+                    delta = (cur_bearing - odom.heading + 180) % 360 - 180
+                    if abs(delta) > 10:
+                        do_turn(delta)
+                    _approach_turn_deg = 0.0   # scan gave fresh heading reference
 
         # ── EXPLORE mode ──────────────────────────────────────────────────
         else:
@@ -1282,97 +1296,28 @@ def mover_thread():
             if status.startswith("bump") or status == "blocked_legs":
                 side = "right" if "R" in status else "left"
                 state_set(bumps=state_get("bumps") + 1)
+                log(f"[MOVER] bump {side} heading={odom.heading:.0f}°")
 
-                # Progress check: if we've moved far enough since the streak
-                # started, reset the corner counter and update the reference.
-                displacement = math.hypot(odom.x - _corner_ref_x,
-                                          odom.y - _corner_ref_y)
-                if displacement >= CORNER_PROGRESS_CM:
-                    _corner_bump_count = 0
-                    _corner_ref_x, _corner_ref_y = odom.x, odom.y
-                _corner_bump_count += 1
+                best_hdg = do_bump_scan()
 
-                # Back off far enough to have room to turn
-                do_reverse_safe(40, skip_check=True)
-
-                if _corner_bump_count >= CORNER_ESCAPE_BUMPS:
-                    # ── Corner escape ─────────────────────────────────────
-                    # No progress in CORNER_ESCAPE_BUMPS bumps — trapped.
-                    # Use depth signal to pick escape direction; if no clear
-                    # preference, alternate CW/CCW. Drive 100 cm to actually
-                    # clear dense furniture (was 60 cm, often not enough).
-                    os_esc = state_get("open_space") or {}
-                    ol_esc = os_esc.get("left",  0.0)
-                    or_esc = os_esc.get("right", 0.0)
-                    if ol_esc > or_esc + DEPTH_SIDE_MARGIN:
-                        escape_deg = +150.0
-                    elif or_esc > ol_esc + DEPTH_SIDE_MARGIN:
-                        escape_deg = -150.0
-                    else:
-                        escape_deg = 150.0 * (-_default_turn_sign)
-                        _default_turn_sign *= -1
-                    log(
-                        f"[MOVER] CORNER ESCAPE: {_corner_bump_count} bumps, "
-                        f"{displacement:.0f}cm from ref → {escape_deg:+.0f}° "
-                        f"(depth L={ol_esc:.2f} R={or_esc:.2f})"
-                    )
-                    speak("Stuck in corner. Escaping.")
-                    do_reverse_safe(20, skip_check=True)
-                    do_turn(escape_deg)
-                    do_forward(MOVE_SPEED, 100.0 / MOVE_SPEED)   # drive 100 cm clear
-                    _corner_bump_count  = 0
-                    _corner_ref_x, _corner_ref_y = odom.x, odom.y
-                else:
-                    # ── Normal bump recovery ──────────────────────────────
-                    open_space = state_get("open_space") or {}
-                    ol2  = open_space.get("left",  0.0)
-                    or2_ = open_space.get("right", 0.0)
-                    left_sec  = int((odom.heading + 90) / 45) % 8
-                    right_sec = int((odom.heading - 90) / 45) % 8
-                    l_new = left_sec  not in _visited_sectors
-                    r_new = right_sec not in _visited_sectors
-                    if l_new and not r_new:
-                        turn_deg = +90.0
-                        dir_str  = "left (unvisited)"
-                    elif r_new and not l_new:
-                        turn_deg = -90.0
-                        dir_str  = "right (unvisited)"
-                    elif ol2 > or2_ + DEPTH_SIDE_MARGIN:
-                        turn_deg = +90.0
-                        dir_str  = "left (depth)"
-                    elif or2_ > ol2 + DEPTH_SIDE_MARGIN:
-                        turn_deg = -90.0
-                        dir_str  = "right (depth)"
-                    else:
-                        turn_deg = 90.0 * _default_turn_sign
-                        _default_turn_sign *= -1
-                        dir_str  = f"{'left' if turn_deg > 0 else 'right'} (alternating)"
-                    log(
-                        f"[MOVER] bump {side} heading={odom.heading:.0f}° "
-                        f"depth L={ol2:.2f} R={or2_:.2f} → turning {dir_str} "
-                        f"[corner {_corner_bump_count}/{CORNER_ESCAPE_BUMPS}]"
-                    )
-                    speak(f"Bump. Turning {dir_str.split()[0]}.")
-                    do_turn(turn_deg)
-
-                _bumps_since_scan += 1
-                if _bumps_since_scan >= SCAN_EVERY_BUMPS:
-                    _bumps_since_scan = 0
-                    _last_scan_x, _last_scan_y = odom.x, odom.y
-                    do_scan_360()
+                if state_get("mode") not in ("APPROACH", "STOP"):
+                    if best_hdg is not None:
+                        delta = (best_hdg - odom.heading + 180) % 360 - 180
+                        if abs(delta) > 10:
+                            log(f"[MOVER] post-bump: turning {delta:+.0f}° toward best heading {best_hdg:.0f}°")
+                            do_turn(delta)
 
             else:
                 # Clean burst — mark this heading sector as visited
                 _visited_sectors.add(int(odom.heading / 45) % 8)
 
-                # Check distance-based scan trigger
+                # Distance-based scan trigger
                 dist_from_scan = math.hypot(odom.x - _last_scan_x,
                                             odom.y - _last_scan_y)
                 if dist_from_scan >= SCAN_EVERY_CM:
                     log(f"[MOVER] distance scan: {dist_from_scan:.0f}cm since last scan")
                     speak("Scanning after travelling five metres.")
                     _last_scan_x, _last_scan_y = odom.x, odom.y
-                    _bumps_since_scan = 0
                     do_scan_360()
 
 
