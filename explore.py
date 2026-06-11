@@ -749,16 +749,9 @@ def mover_thread():
         while elapsed < secs:
             if state_get("mode") == "STOP":
                 break
-            # Mid-burst leg check: stop if leg geometry (not YOLO) has flagged
-            # the center blocked since this burst started.  Using the dedicated
-            # legs_blocking flag avoids a false negative when YOLO sees an
-            # unrelated object (nearest_cm non-None) while legs are the real hazard.
-            if (state_get("mode") != "APPROACH"
-                    and state_get("legs_blocking")
-                    and (state_get("blocked") or {}).get("center")):
+            if state_get("mode") == "STOP":
                 send_cmd("stop")
-                log(f"[MOVER] mid-burst stop: legs blocking center after {elapsed:.1f}s")
-                return "blocked_legs", elapsed
+                return "ok", elapsed
             seg = min(_FORWARD_SEG_S, secs - elapsed)
             send_cmd(f"forward {speed} {seg:.2f}")
             time.sleep(seg + 0.05)
