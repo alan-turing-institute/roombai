@@ -654,6 +654,7 @@ def camera_thread():
 def mover_thread():
     moves_since_full   = 0
     _approach_bumps    = 0
+    _approach_turn_deg = 0.0   # cumulative turning since bearing last confirmed visually
     _consecutive_stuck = 0
     _bumps_since_scan  = 0
     _last_scan_x       = 0.0   # odometry position at the last 360° scan
@@ -968,6 +969,7 @@ def mover_thread():
 
         if mode != "APPROACH":
             _approach_bumps = 0
+            _approach_turn_deg = 0.0
 
         if mode == "WAIT":
             time.sleep(1.0)
@@ -1001,13 +1003,50 @@ def mover_thread():
                 state_set(mode="EXPLORE")
                 continue
 
-            heading = odom.heading
-            delta   = (door_bearing - heading + 180) % 360 - 180
-            if abs(delta) > 10:
-                log(f"[MOVER] APPROACH: turning {delta:+.0f}° toward bearing {door_bearing:.0f}°")
-                do_turn(delta)
+            # Stale bearing check: motor speed/turn errors compound across turns.
+            # After 360° of cumulative turning without a visual re-lock, the bearing
+            # is too unreliable to keep chasing — drop back to EXPLORE so the camera
+            # can re-acquire the door from scratch.
+            if _approach_turn_deg > 360:
+                log(
+                    f"[MOVER] APPROACH: bearing stale ({_approach_turn_deg:.0f}° cumulative "
+                    f"turn without visual lock) — returning to EXPLORE"
+                )
+                speak("Lost the door. Resuming exploration.")
+                state_set(mode="EXPLORE", door_bearing=None)
+                _approach_bumps    = 0
+                _approach_turn_deg = 0.0
+                continue
 
-            last_door = state_get("last_door") or {}
+            last_door    = state_get("last_door") or {}
+            door_visible = (
+                last_door.get("door_visible")
+                and last_door.get("confidence", 0) >= DOOR_CONFIRM_MIN_CONF
+            )
+
+            if door_visible:
+                # Vision-first steering: camera gives ground truth about door direction
+                # right now — more reliable than odometry-drifted bearing.
+                pos   = last_door.get("door_position", "center")
+                steer = {"left": +25, "center": 0, "right": -25}.get(pos, 0)
+                if abs(steer) > 5:
+                    log(f"[MOVER] APPROACH: visual steer {steer:+.0f}° (door {pos})")
+                    do_turn(steer)
+                    _approach_turn_deg += abs(steer)
+                # Refresh bearing from current heading — keeps it valid for blind phase
+                state_set(door_bearing=odom.heading)
+                _approach_turn_deg = 0.0   # bearing just confirmed visually — reset staleness
+            else:
+                # Door not in frame — use bearing as compass fallback
+                heading = odom.heading
+                delta   = (door_bearing - heading + 180) % 360 - 180
+                if abs(delta) > 10:
+                    log(
+                        f"[MOVER] APPROACH: bearing turn {delta:+.0f}° toward {door_bearing:.0f}° "
+                        f"(cumulative={_approach_turn_deg:.0f}°)"
+                    )
+                    do_turn(delta)
+                    _approach_turn_deg += abs(delta)
             door_dist = last_door.get("door_distance_cm") or 9999
             if door_dist < APPROACH_SLOW_DIST:
                 speed = max(15, int(MOVE_SPEED * door_dist / APPROACH_SLOW_DIST))
