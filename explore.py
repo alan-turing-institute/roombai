@@ -1226,16 +1226,30 @@ def mover_thread():
                 state_set(bumps=state_get("bumps") + 1)
                 log(f"[MOVER] APPROACH: {status}")
 
-                prev_bearing = state_get("door_bearing")
-                do_bump_scan()
+                last_door_now = state_get("last_door") or {}
+                door_currently_visible = (
+                    last_door_now.get("door_visible")
+                    and last_door_now.get("confidence", 0) >= DOOR_CONFIRM_MIN_CONF
+                )
 
-                # Re-orient toward bearing (updated if door found in scan, else previous).
-                cur_bearing = state_get("door_bearing") or prev_bearing
-                if cur_bearing is not None and state_get("mode") == "APPROACH":
-                    delta = (cur_bearing - odom.heading + 180) % 360 - 180
-                    if abs(delta) > 10:
-                        do_turn(delta)
-                    _approach_turn_deg = 0.0   # scan gave fresh heading reference
+                if door_currently_visible:
+                    # Door is in view — steer around the obstacle and keep pushing
+                    # forward rather than backing away from the door.
+                    deg = choose_avoid_turn()
+                    log(f"[MOVER] APPROACH bump: door visible — steer {deg:+.0f}° and push")
+                    speak("Obstacle. Steering around door.")
+                    do_turn(deg)
+                else:
+                    prev_bearing = state_get("door_bearing")
+                    do_bump_scan()
+
+                    # Re-orient toward bearing (updated if door found in scan, else previous).
+                    cur_bearing = state_get("door_bearing") or prev_bearing
+                    if cur_bearing is not None and state_get("mode") == "APPROACH":
+                        delta = (cur_bearing - odom.heading + 180) % 360 - 180
+                        if abs(delta) > 10:
+                            do_turn(delta)
+                        _approach_turn_deg = 0.0   # scan gave fresh heading reference
 
         # ── EXPLORE mode ──────────────────────────────────────────────────
         else:
