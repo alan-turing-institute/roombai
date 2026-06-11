@@ -73,6 +73,6 @@ if [[ $RESTART -eq 1 ]]; then
     ssh_pi "pkill -f explore.py 2>/dev/null || true"
     sleep 2
     ssh_pi "source ~/yolo_new/bin/activate && \
-            cd $REPO && nohup bash run.sh > /tmp/run_output.log 2>&1 &"
+            cd $REPO && nohup bash run_lynge.sh > /tmp/run_output.log 2>&1 &"
     echo "[push] restart launched — tail /tmp/run_output.log on Pi for startup progress"
 fi

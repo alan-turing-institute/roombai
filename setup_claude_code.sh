@@ -41,12 +41,12 @@ fi
 #
 #   source ~/my_venv/bin/activate && claude
 #
-# run.sh already activates ~/yolo_new at the top, so Claude Code launched from
+# run_lynge.sh already activates ~/yolo_new at the top, so Claude Code launched from
 # within that script automatically gets the right Python. Writing venv paths
 # into any settings.json (global or project-level) would interfere with other
 # users who share this repo directory and use different venvs.
 
 ok "Claude Code uses whichever venv is active in the shell — no config needed"
 info "To use with yolo_new:  source ~/yolo_new/bin/activate && claude"
-info "(run.sh activates ~/yolo_new automatically, so Claude Code launched"
+info "(run_lynge.sh activates ~/yolo_new automatically, so Claude Code launched"
 info " from within a run already has the correct Python environment)"

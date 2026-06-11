@@ -1,7 +1,7 @@
 Launch a RoombaI door-finding run on the Raspberry Pi.
 
 Arguments: $ARGUMENTS
-Supported flags (passed straight through to run.sh):
+Supported flags (passed straight through to run_lynge.sh):
   --greet   Enable human greeting mode (80 % "Hello human" / 20 % Yoda phrase)
 
 ## Steps
@@ -88,7 +88,7 @@ sshpass -p aipi ssh -o StrictHostKeyChecking=no <pi_host> \
 
 ```
 sshpass -p aipi ssh -o StrictHostKeyChecking=no <pi_host> \
-  "chmod +x /home/hackweek26/roombai/run.sh /home/hackweek26/roombai/install_models.sh"
+  "chmod +x /home/hackweek26/roombai/run_lynge.sh /home/hackweek26/roombai/install_models.sh"
 ```
 
 ### 6. Create the local run directory and start the live sync
@@ -100,22 +100,22 @@ RUN_DIR="runs/$TIMESTAMP"
 mkdir -p "$RUN_DIR/frames"
 ```
 
-Start `sync_run.sh` in the background — it will download Pi data every 60 s,
+Start `sync_run_lynge.sh` in the background — it will download Pi data every 60 s,
 re-downloading logs and only fetching new frames (skipping already-downloaded ones).
 The password for the Pi is `aipi`.
 ```
-bash sync_run.sh "$RUN_DIR" <pi_host> aipi &
+bash sync_run_lynge.sh "$RUN_DIR" <pi_host> aipi &
 SYNC_PID=$!
 echo "[run] live sync started (PID $SYNC_PID) → $RUN_DIR"
 ```
 
-### 7. Execute run.sh on the Pi (background so sync keeps running)
+### 7. Execute run_lynge.sh on the Pi (background so sync keeps running)
 
 Run the SSH session **in the background** so the sync loop continues in parallel.
 Always activate the venv first:
 ```
 sshpass -p aipi ssh -o StrictHostKeyChecking=no -tt <pi_host> \
-    "source ~/yolo_new/bin/activate && bash /home/hackweek26/roombai/run.sh $ARGUMENTS" &
+    "source ~/yolo_new/bin/activate && bash /home/hackweek26/roombai/run_lynge.sh $ARGUMENTS" &
 SSH_PID=$!
 echo "[run] SSH session started (PID $SSH_PID)"
 ```
@@ -129,7 +129,7 @@ TAIL_PID=$!
 Wait for the SSH session to finish (you will be notified when the background
 job completes). Do NOT poll — just wait for the notification.
 
-`run.sh` performs in order:
+`run_lynge.sh` performs in order:
   a. **Model installer** — runs `install_models.sh`: installs `python3-numba`
      via apt, installs `hailo-model-zoo` from `~/hailo-model-zoo`, installs
      `ultralytics`, then downloads any absent HEFs (yolo_seg, midas, fast_scnn,
@@ -149,7 +149,7 @@ Stop the log tail:
 kill $TAIL_PID 2>/dev/null || true
 ```
 
-Signal `sync_run.sh` to stop (it will do one final sync pass before exiting):
+Signal `sync_run_lynge.sh` to stop (it will do one final sync pass before exiting):
 ```
 touch "$RUN_DIR/.sync_stop"
 ```
@@ -196,6 +196,6 @@ If `check_deps.py` or any step reports a missing Python package or import error:
      "source ~/yolo_new/bin/activate && pip install ~/hailo-model-zoo"
    ```
 3. **If installation succeeded**: tell the user what was installed, then
-   restart the run from step 4 (clear /tmp/ and re-run run.sh).
+   restart the run from step 4 (clear /tmp/ and re-run run_lynge.sh).
 4. **If installation failed**: report the exact error to the user, explain
    what was tried, and ask for guidance before retrying.

@@ -12,7 +12,7 @@ Exit codes:
   0 — all critical dependencies satisfied (warnings for optional ones are OK)
   1 — one or more critical dependencies could not be resolved
 
-Run inside the ~/yolo_new virtual environment (run.sh does this automatically).
+Run inside the ~/yolo_new virtual environment (run_lynge.sh does this automatically).
 """
 
 import importlib

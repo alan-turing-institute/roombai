@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# run.sh — RoombaI full startup script.  Run this ON the Raspberry Pi.
+# run_lynge.sh — RoombaI full startup script.  Run this ON the Raspberry Pi.
 #
-# Usage:  bash run.sh [--greet]
+# Usage:  bash run_lynge.sh [--greet]
 #   --greet   Enable human greeting mode (80 % / 20 % phrase split)
 #
 # What it does:
