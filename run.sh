@@ -51,6 +51,10 @@ fail() { echo "  ✗ $*" >&2; exit 1; }
 # ── Step 0: Clear stale /tmp data from previous runs ─────────────────────────
 # Do this unconditionally so leftover frame files never corrupt the new run.
 step "Step 0 — Clearing stale /tmp run data"
+# Kill the old TTS daemon BEFORE deleting speak_queue.txt — if we delete the
+# file while tail -f is following it, the daemon tracks the old inode and
+# misses all speak() calls in the new run.
+pkill -f speak_queue.txt 2>/dev/null || true
 rm -rf /tmp/roomba_frames /tmp/roomba_maps /tmp/roomba_state.json \
        /tmp/roomba_log.txt /tmp/roomba_events.json /tmp/speak_queue.txt \
        /tmp/pilot.log 2>/dev/null || true
