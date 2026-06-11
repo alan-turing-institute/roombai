@@ -9,8 +9,8 @@
 //!    just this function, leaving the navigator untouched.
 //! 2. [`Navigator`] — a VFH-style heading chooser. If a safe forward heading
 //!    exists, drive toward the clearest one (biased to straight) at a speed that
-//!    scales with clearance; otherwise spin in place toward the more open side
-//!    until something safe opens up.
+//!    scales with clearance; otherwise spin in place (left) until something
+//!    safe opens up.
 //!
 //! Everything here is pure (no I/O, no clock) so it is developed and tuned
 //! entirely offline: replay recorded frames through `vision::segment_floor`,
@@ -165,35 +165,14 @@ fn best_heading(profile: &PolarClearance, p: &NavParams) -> Option<(f32, f32)> {
         .map(|(r, _)| (r.bearing_rad, r.clearance))
 }
 
-/// Which side has more total clearance: +1 left, -1 right, 0 if balanced.
-fn open_side(profile: &PolarClearance) -> f64 {
-    let (mut left, mut right) = (0.0f32, 0.0f32);
-    for r in &profile.rays {
-        if r.bearing_rad > 0.0 {
-            left += r.clearance;
-        } else if r.bearing_rad < 0.0 {
-            right += r.clearance;
-        }
-    }
-    match left.partial_cmp(&right).unwrap() {
-        std::cmp::Ordering::Greater => 1.0,
-        std::cmp::Ordering::Less => -1.0,
-        std::cmp::Ordering::Equal => 0.0,
-    }
-}
-
-/// VFH-style local navigator. Holds a little state for search hysteresis so it
-/// doesn't dither between left/right when blocked.
+/// VFH-style local navigator.
 pub struct Navigator {
     pub params: NavParams,
-    /// Direction to spin when searching: +1 left, -1 right.
-    search_dir: f64,
-    last_state: NavState,
 }
 
 impl Navigator {
     pub fn new(params: NavParams) -> Self {
-        Navigator { params, search_dir: 1.0, last_state: NavState::Search }
+        Navigator { params }
     }
 
     /// Decide a velocity command from one frame's clearance profile.
@@ -209,12 +188,6 @@ impl Navigator {
                 let cl = (((clearance - p.safe_clearance) / span) as f64).clamp(0.0, 1.0);
                 let align = (bearing as f64).cos().max(0.0);
                 let v = p.creep_v_mm_s + (p.max_v_mm_s - p.creep_v_mm_s) * cl * align;
-                // Remember where the room is, in case the next frame is blocked.
-                let s = open_side(profile);
-                if s != 0.0 {
-                    self.search_dir = s;
-                }
-                self.last_state = NavState::Drive;
                 NavDecision {
                     twist: Twist { v_mm_s: v, omega_rad_s: omega },
                     state: NavState::Drive,
@@ -223,18 +196,10 @@ impl Navigator {
                 }
             }
             None => {
-                // Pick a search direction at the moment of blocking, then hold
-                // it (hysteresis) until something drivable appears.
-                if self.last_state == NavState::Drive {
-                    let s = open_side(profile);
-                    if s != 0.0 {
-                        self.search_dir = s;
-                    }
-                }
-                self.last_state = NavState::Search;
+                // Whole frame blocked: always spin left (CCW) to look for an opening.
                 let best = profile.rays.iter().map(|r| r.clearance).fold(0.0, f32::max);
                 NavDecision {
-                    twist: Twist::spin(self.search_dir * p.search_omega_rad_s),
+                    twist: Twist::spin(p.search_omega_rad_s),
                     state: NavState::Search,
                     chosen_bearing: None,
                     clearance: best,
@@ -327,18 +292,14 @@ mod tests {
     }
 
     #[test]
-    fn searches_when_blocked_and_holds_direction() {
+    fn always_spins_left_when_blocked() {
         let mut nav = Navigator::new(NavParams::default());
-        // Everything below safe_clearance, but the left half is relatively more open.
-        let blocked = profile(&[(0.3, 0.25), (0.0, 0.15), (-0.3, 0.05)]);
+        // Everything below safe_clearance; right half is relatively more open...
+        let blocked = profile(&[(0.3, 0.05), (0.0, 0.15), (-0.3, 0.25)]);
         let d = nav.step(&blocked);
         assert_eq!(d.state, NavState::Search);
         assert_eq!(d.twist.v_mm_s, 0.0);
-        assert!(d.twist.omega_rad_s > 0.0, "should spin left toward the open side");
-        // Hysteresis: a later frame whose open side flips shouldn't flip us.
-        let dir1 = d.twist.omega_rad_s.signum();
-        let flipped = profile(&[(0.3, 0.05), (0.0, 0.15), (-0.3, 0.25)]);
-        let d2 = nav.step(&flipped);
-        assert_eq!(d2.twist.omega_rad_s.signum(), dir1, "search direction should hold");
+        // ...but we always spin left (CCW) regardless of which side is more open.
+        assert!(d.twist.omega_rad_s > 0.0, "blocked frame should always spin left");
     }
 }

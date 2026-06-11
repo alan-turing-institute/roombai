@@ -35,6 +35,10 @@ const CAMERA_FPS: u32 = 15;
 /// On a bump, reverse straight by this distance (no turn), measured by odometry.
 const REVERSE_DIST_MM: f64 = 250.0;
 const REVERSE_SPEED_MM_S: f64 = -100.0;
+/// After the reverse, turn this far left so we don't immediately re-drive into
+/// the same obstacle, measured by odometry heading change.
+const POST_BUMP_SPIN_RAD: f64 = std::f64::consts::FRAC_PI_6; // 30°
+const POST_BUMP_SPIN_OMEGA: f64 = 0.7; // rad/s, +CCW = left
 
 struct Opts {
     port: String,
@@ -155,6 +159,8 @@ enum Outcome {
 struct Behaviour {
     /// Pose where the current bump-reverse began; `Some` while reversing.
     reverse_from: Option<escape_core::Pose2>,
+    /// Heading (rad) where the post-reverse left turn began; `Some` while turning.
+    spin_from: Option<f64>,
     paused_for_drop: bool,
     last_spoken: Option<&'static str>,
 }
@@ -198,6 +204,7 @@ fn run_loop(
                 speak_once(&mut beh, "Lifted. Waiting to be set down.");
                 beh.paused_for_drop = true;
                 beh.reverse_from = None;
+                beh.spin_from = None;
                 sleep_rest(tick, period);
                 continue;
             }
@@ -221,7 +228,24 @@ fn run_loop(
                 sleep_rest(tick, period);
                 continue;
             }
+            // Reverse done → turn 30° left before resuming vision steering, so we
+            // don't immediately pick "straight" back into the same obstacle.
             beh.reverse_from = None;
+            beh.spin_from = cur.map(|f| f.pose.theta_rad);
+            speak_once(&mut beh, "Turning left.");
+        }
+
+        // Active post-bump turn: spin left until heading has changed by 30°.
+        if let Some(start_theta) = beh.spin_from {
+            let turned = cur
+                .map(|f| angle_diff(f.pose.theta_rad, start_theta).abs())
+                .unwrap_or(0.0);
+            if turned < POST_BUMP_SPIN_RAD {
+                driver.set_twist(Twist::spin(POST_BUMP_SPIN_OMEGA));
+                sleep_rest(tick, period);
+                continue;
+            }
+            beh.spin_from = None;
         }
 
         // --- Vision-driven steering ----------------------------------------
@@ -266,6 +290,18 @@ fn run_loop(
 /// Planar distance between two poses, mm.
 fn dist(a: escape_core::Pose2, b: escape_core::Pose2) -> f64 {
     ((a.x_mm - b.x_mm).powi(2) + (a.y_mm - b.y_mm).powi(2)).sqrt()
+}
+
+/// Smallest signed heading difference `a − b`, wrapped to (−π, π].
+fn angle_diff(a: f64, b: f64) -> f64 {
+    let mut d = a - b;
+    while d > std::f64::consts::PI {
+        d -= 2.0 * std::f64::consts::PI;
+    }
+    while d < -std::f64::consts::PI {
+        d += 2.0 * std::f64::consts::PI;
+    }
+    d
 }
 
 fn narrate_state(beh: &mut Behaviour, state: NavState) {
