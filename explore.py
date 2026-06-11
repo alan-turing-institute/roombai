@@ -881,19 +881,22 @@ def mover_thread():
             )
             return steer
 
-        # ── 2. Real-time YOLO ────────────────────────────────────────────────
+        # ── 2. fast_depth open-space fractions (primary) ────────────────────
+        # Depth sees actual open space regardless of what objects are or aren't
+        # present — reliable even when YOLO detections are sparse (e.g. chairs
+        # removed from the corridor).  YOLO is a secondary confirmation only.
+        ol  = open_space.get("left",  0.0)
+        or_ = open_space.get("right", 0.0)
+        if ol > or_ + DEPTH_SIDE_MARGIN:
+            return 40.0
+        if or_ > ol + DEPTH_SIDE_MARGIN:
+            return -40.0
+
+        # ── 3. Real-time YOLO (secondary — confirms depth preference) ────────
         if clear_path == "right" and not blocked.get("right"):
             return -40.0
         if clear_path == "left" and not blocked.get("left"):
             return 40.0
-
-        # ── 3. fast_depth open-space fractions ──────────────────────────────
-        ol  = open_space.get("left",  0.0)
-        or_ = open_space.get("right", 0.0)
-        if ol > or_ + 0.05:
-            return 40.0
-        if or_ > ol + 0.05:
-            return -40.0
 
         # ── 4. Prefer unvisited heading sectors ──────────────────────────────
         # Avoid circling the same area: if one turn leads to a sector not yet
