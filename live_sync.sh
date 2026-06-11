@@ -11,9 +11,15 @@
 #
 # Kill this process to stop (kill %1 if backgrounded, or Ctrl-C if foreground).
 
-PI_HOST="hackweek26@10.10.100.185"
-PI_PASS="aipi"
-LIVE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runs/live"
+PI_HOST="${2:-hackweek26@10.10.100.185}"
+PI_PASS="${3:-aipi}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# First argument overrides the target directory; default is runs/live
+if [[ -n "$1" ]]; then
+    LIVE_DIR="$1"
+else
+    LIVE_DIR="$SCRIPT_DIR/runs/live"
+fi
 
 mkdir -p "$LIVE_DIR"
 echo "[live_sync] syncing Pi → $LIVE_DIR every 1 s"
@@ -30,6 +36,9 @@ while true; do
         "$PI_HOST:/tmp/roomba_state.json" \
         "$PI_HOST:/tmp/roomba_log.txt" \
         "$LIVE_DIR/"
+    rsync_pi --ignore-existing \
+        "$PI_HOST:/tmp/roomba_frames/" \
+        "$LIVE_DIR/frames/"
 
     # Print a one-line heartbeat every 10 syncs so the terminal stays useful
     n=$(( n + 1 ))
