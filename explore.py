@@ -679,30 +679,37 @@ def camera_thread():
 
             elif mode == "APPROACH":
                 if door.get("door_center_px") is not None:
+                    # Pixel-level measurement — update bearing with proportional steering.
                     error_px = door["door_center_px"] - 320
                     offset = -error_px * (66.0 / 640.0)
-                else:
-                    pos = door.get("door_position", "center")
-                    offset = {"left": 25, "center": 0, "right": -25}.get(pos, 0)
-                if abs(offset) > 1:
-                    new_bearing = (odom.heading + offset) % 360
-                    # Reject bearing updates that are >90° from current — likely
-                    # a false positive or scan artefact pointing the wrong way.
-                    prev_b = state_get("door_bearing")
-                    if prev_b is not None:
-                        diff = abs((new_bearing - prev_b + 180) % 360 - 180)
-                        if diff > 90:
+                    if abs(offset) > 1:
+                        new_bearing = (odom.heading + offset) % 360
+                        # Reject bearing updates that are >90° from current — likely
+                        # a false positive or scan artefact pointing the wrong way.
+                        prev_b = state_get("door_bearing")
+                        if prev_b is not None:
+                            diff = abs((new_bearing - prev_b + 180) % 360 - 180)
+                            if diff > 90:
+                                log(
+                                    f"[VISION] APPROACH: bearing update rejected "
+                                    f"({new_bearing:.0f}° vs current {prev_b:.0f}°, diff={diff:.0f}°)"
+                                )
+                                new_bearing = None
+                        if new_bearing is not None:
                             log(
-                                f"[VISION] APPROACH: bearing update rejected "
-                                f"({new_bearing:.0f}° vs current {prev_b:.0f}°, diff={diff:.0f}°)"
+                                f"[VISION] APPROACH: pixel-steer {offset:+.1f}° "
+                                f"(px={door.get('door_center_px')}) → bearing {new_bearing:.0f}°"
                             )
-                            new_bearing = None
-                    if new_bearing is not None:
-                        log(
-                            f"[VISION] APPROACH: pixel-steer {offset:+.1f}° "
-                            f"(px={door.get('door_center_px')}) → bearing {new_bearing:.0f}°"
-                        )
-                        state_set(door_bearing=new_bearing)
+                            state_set(door_bearing=new_bearing)
+                else:
+                    # Coarse YOLO-only position (left/center/right) — don't update bearing.
+                    # Applying a fixed ±25° to the current heading each frame causes
+                    # cumulative drift.  Keep the existing bearing and let pixel-level
+                    # data (when available) correct it.
+                    log(
+                        f"[VISION] APPROACH: door visible ({door.get('door_position')}) "
+                        f"— no px data, holding bearing {state_get('door_bearing'):.0f}°"
+                    )
 
             elif mode not in ("APPROACH", "STOP", "WAIT"):
                 if door.get("door_center_px") is not None:
