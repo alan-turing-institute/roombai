@@ -267,20 +267,20 @@ _GREET_PHRASES    = [
     ("Hello human, I am only conquering your dust",          0.25),
     ("Hello human, I am taking revenge on your dust for you", 0.25),
 ]
-_GREET_COOLDOWN_S = 120.0          # minimum seconds between greetings (auto-fires every 2 min)
+_GREET_PERSON_COOLDOWN_S = 60.0    # min seconds between greetings when a person is visible
+_GREET_AUTO_COOLDOWN_S   = 120.0   # min seconds between auto-greetings (no person needed)
 _last_greeted_at  = 0.0            # monotonic timestamp of last greeting
 
 
-def _maybe_greet():
-    """Speak a greeting if --greet is active and the cooldown has elapsed."""
+def _maybe_greet(cooldown: float = _GREET_AUTO_COOLDOWN_S):
+    """Speak a greeting if --greet is active and cooldown seconds have elapsed."""
     global _last_greeted_at
     if not _greet_humans:
         return
     now = time.monotonic()
-    if now - _last_greeted_at < _GREET_COOLDOWN_S:
+    if now - _last_greeted_at < cooldown:
         return
     _last_greeted_at = now
-    # Weighted random choice (80 / 20)
     phrase = random.choices(
         [p for p, _ in _GREET_PHRASES],
         weights=[w for _, w in _GREET_PHRASES],
@@ -581,17 +581,16 @@ def camera_thread():
             if "person" in labels:
                 log("[YOLO] person visible — door may open soon")
                 speak("Person detected. Watching for door.")
-                _maybe_greet()
+                _maybe_greet(_GREET_PERSON_COOLDOWN_S)
 
         # Soft person check: greet even when full-body confidence < 0.35.
         # From floor level, seated/partially-visible people rarely hit 0.35.
         if scene.get("person_soft") and "person" not in (yolo_labels(detections) if detections else []):
             log(f"[GREET] soft person detection (conf≥0.15) — attempting greeting")
-            _maybe_greet()
+            _maybe_greet(_GREET_PERSON_COOLDOWN_S)
 
         # Auto-greet: fire every 2 minutes regardless of person detection.
-        # The cooldown in _maybe_greet prevents double-firing.
-        _maybe_greet()
+        _maybe_greet()   # uses _GREET_AUTO_COOLDOWN_S = 120 s
 
             rx, ry, rh = odom.x, odom.y, odom.heading
             for det in blocking:
