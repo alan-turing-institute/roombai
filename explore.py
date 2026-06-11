@@ -547,6 +547,12 @@ def camera_thread():
                 speak("Person detected. Watching for door.")
                 _maybe_greet()
 
+        # Soft person check: greet even when full-body confidence < 0.35.
+        # From floor level, seated/partially-visible people rarely hit 0.35.
+        if scene.get("person_soft") and "person" not in (yolo_labels(detections) if detections else []):
+            log(f"[GREET] soft person detection (conf≥0.15) — attempting greeting")
+            _maybe_greet()
+
             rx, ry, rh = odom.x, odom.y, odom.heading
             for det in blocking:
                 map_recorder.record_yolo(rx, ry, rh,

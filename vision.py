@@ -916,6 +916,32 @@ def _parse_yolo_boxes(
     return detections
 
 
+def _person_soft_detected(raw: dict[str, np.ndarray] | None, threshold: float = 0.15) -> bool:
+    """
+    Return True if the raw Hailo output contains any person detection at or
+    above `threshold` (default 0.15).
+
+    Used only for greeting — obstacle avoidance uses the main 0.35 threshold.
+    From floor level, YOLO confidence for partially-visible seated/standing
+    people rarely exceeds 0.35, so the greeting never fired at standard threshold.
+    """
+    if raw is None:
+        return False
+    person_idx = COCO_CLASSES.index("person")
+    for arr in raw.values():
+        a = arr[0] if arr.ndim > 2 else arr
+        if a.ndim != 2:
+            continue
+        for det in a:
+            if len(det) < 6:
+                continue
+            if float(det[4]) < threshold:
+                continue
+            if int(det[5]) == person_idx:
+                return True
+    return False
+
+
 def run_yolo(img_bgr: np.ndarray) -> list[dict]:
     """Legacy alias — runs yolo_det, returns detection list."""
     orig_h, orig_w = img_bgr.shape[:2]
@@ -1439,6 +1465,7 @@ def analyze_scene(
     # 3. YOLO detection
     detections: list[dict] = []
     raw = _hailo_infer("yolo_det", img_bgr)
+    person_soft = _person_soft_detected(raw)   # low-conf check for greeting only
     if raw is not None:
         detections = _parse_yolo_boxes(raw, orig_w, orig_h, depth_map, scene_depth_cm,
                                        flow_field, baseline_cm, y_horizon)
@@ -1500,6 +1527,7 @@ def analyze_scene(
         "legs_blocking":  legs_blocking,
         "tilt_deg":       tilt_deg,
         "blind_spot_cm":  blind_spot_cm,
+        "person_soft":    person_soft,   # person at ≥0.15 conf — for greeting only
     }
 
 
