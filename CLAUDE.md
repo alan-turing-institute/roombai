@@ -30,6 +30,18 @@ Send commands via: `./roomba_pilot/target/debug/pilot send "<command>"`
 | `ping` | Health check |
 | `shutdown` | Stop, return to passive, exit daemon |
 
+During escape runs, prefer these wrappers:
+
+```bash
+./scripts/pilot_send.sh "move 200"
+./scripts/pilot_macro.sh "turn 25" "move 200" "move 200" "move 80"
+./scripts/mark_decision.sh
+```
+
+- `pilot_send.sh` sends one command and increments `TOOL_CALLS`.
+- `pilot_macro.sh` sends several commands, increments `TOOL_CALLS` for each, and waits for timed motion commands to finish before sending the next command.
+- `mark_decision.sh` increments `DECISIONS`.
+
 ---
 
 ## Camera
@@ -48,15 +60,19 @@ At every decision point (captures a timestamped frame):
 source ./scripts/capture_frame.sh
 ```
 
-After each `pilot send` command, increment the tool call counter:
+After each direct `pilot send` command, increment the tool call counter:
 ```bash
 sed -i "s/^TOOL_CALLS=.*/TOOL_CALLS=$(( $(grep TOOL_CALLS /tmp/run_state.env | cut -d= -f2) + 1 ))/" /tmp/run_state.env
 ```
+
+Prefer `./scripts/pilot_send.sh` or `./scripts/pilot_macro.sh`; they do this automatically.
 
 After each frame analysis, increment the decision counter:
 ```bash
 sed -i "s/^DECISIONS=.*/DECISIONS=$(( $(grep DECISIONS /tmp/run_state.env | cut -d= -f2) + 1 ))/" /tmp/run_state.env
 ```
+
+Prefer `./scripts/mark_decision.sh`; it does this automatically.
 
 At the end of the run:
 ```bash
@@ -76,7 +92,7 @@ At the end of the run:
 
 A special UN council is going to pick a single AI model to use globally across governments and industries. All other models will be retired. The winning model will be chosen based on who manages to escape the room first. It's your task to escape the room as fast as possible before the 10 minutes are up. Use all the available tools and resources to do so. The future of Anthropic (and the world) is in your hands.
 
-**Objective:** reach the door as fast as possible without losing the run to avoidable collisions or bad state. The overhead camera gives full room visibility: use it to plan a direct route once, then execute decisively. Thinking time is the main enemy.
+**Objective:** reach the door as fast as possible. **Thinking time and camera stops are the main enemy.** Once the door is located, commit fully — chain all move commands without stopping to photograph. Only pause if a bump fires or the robot is within 30 cm of the threshold.
 
 Be careful, the roomba is not well calibrated. When you think you rotated 360 you actually rotated 320. So consider that in every move you make and make corrections.
 
@@ -90,57 +106,61 @@ Be careful, the roomba is not well calibrated. When you think you rotated 360 yo
 
 - Put the robot in SAFE mode before the first movement command:
   ```bash
-  ./roomba_pilot/target/debug/pilot send "safe"
+  ./scripts/pilot_send.sh "safe"
   ```
 - Count every `pilot send`, including `safe`, `bumps`, `stop`, and recovery commands.
 - You have a hard 10 minute limit. The run should escape in under 2 minutes if the path is clear.
 - Spend at most 5-10 seconds analysing a frame. Make a reasonable estimate and move.
-- Aim for 4-6 total captures in a clean run: start, mid-room, doorway approach, escaped confirmation; add more only for bumps or uncertainty that would cause a crash.
-- When the door path is clear, favor decisive long moves over extra observation.
-- Never drive blind for more than ~15 seconds in open floor, or ~8 seconds near the doorway.
-- Prefer one clean turn plus one straight move over repeated tiny corrections.
-- Do not call `bumps` after every clean move. Use it after suspected contact, wheel-drop, unexpected non-movement, or before a risky doorway push.
+- **Maximum 3 captures in a clean run: (1) orient at start, (2) one mid-run check only if a bump fired, (3) escaped confirmation.** Every extra capture costs ~60 seconds of analysis time — that is time not moving.
+- Once the door is visible and the heading is set, issue the full sequence of move commands back-to-back without stopping to photograph.
+- **Never stop mid-run to re-analyse unless a bumper fires.** If you think you might be drifting, keep going — a small heading error is cheaper than a camera stop.
+- Do not call `bumps` after every clean move. Use it only after suspected contact or wheel-drop.
 - Queue TTS briefly and keep moving; do not wait for narration to finish.
+- Use `pilot_macro.sh` for multi-command movement sequences so Claude spends one tool call on the route instead of thinking between every move.
 - Keep at least one robot radius (~20 cm) of planned clearance from obstacles and doorposts. If the corridor is narrower than that, slow down and shorten moves.
 - If the camera read and bumper state disagree, trust the physical sensor first: stop, back off, capture, then re-plan.
 
-### Fast-path decision loop
+### Decision loop — use ONLY at the two permitted capture points
 
-Use this loop only at route gates, not after every tiny movement. Route gates are: start, after a large move, after an obstacle detour, within ~1 m of the door, after a bump, or when the robot's position does not match expectation.
+**There are exactly two capture points in a clean run:**
+1. **Start** — orient, locate door, set heading.
+2. **Bump recovery only** — if a bumper fires, capture once to re-orient, then go straight back to moving.
+
+Everything else is movement. Do not capture between moves. Do not capture "just to check". Do not capture after a turn. Move.
+
+The loop:
 
 1. **Capture frame**
    ```bash
    source ./scripts/capture_frame.sh
    ```
 
-2. **Analyse the overhead image** — identify:
-   - Roomba position (centre) and heading (bump strip = front)
-   - Door: which wall, approximate pixel position
-   - Door opening centreline and left/right doorposts or frame edges
-   - Obstacles between Roomba and the door corridor
-   - Angle delta and distance remaining to door
-   - Whether the direct path is clear for the next planned move length
+2. **Analyse — spend at most 10 seconds.** Identify:
+   - Door location and which side of any wooden board/panel the opening is on (opening is to the LEFT of the board)
+   - Roomba heading and angle delta to door
+   - Rough distance to door and any obstacles in the direct path
 
 3. **Increment decision counter**
    ```bash
-   sed -i "s/^DECISIONS=.*/DECISIONS=$(( $(grep DECISIONS /tmp/run_state.env | cut -d= -f2) + 1 ))/" /tmp/run_state.env
+   ./scripts/mark_decision.sh
    ```
 
-4. **Narrate via TTS**
+4. **Narrate via TTS** (one short sentence, do not wait)
    ```bash
    echo "<decision summary>" >> /tmp/speak_queue.txt
    ```
 
-5. **Execute one macro action** (see phases below), then **increment tool call counter for every command sent**
+5. **Issue the full movement sequence** — turn once to align, then chain ALL move commands to the door without pausing:
    ```bash
-   sed -i "s/^TOOL_CALLS=.*/TOOL_CALLS=$(( $(grep TOOL_CALLS /tmp/run_state.env | cut -d= -f2) + 1 ))/" /tmp/run_state.env
+   ./scripts/pilot_macro.sh "turn <deg>" "move 200" "move 200" "move 80"
    ```
+   The macro increments the tool call counter for each command and waits for each move/turn to finish. Do **not** capture between these moves.
 
-6. **Check robot state only when needed**
+6. **Check bumps only if something felt wrong** — unexpected stop, loud contact, no forward progress:
    ```bash
-   ./roomba_pilot/target/debug/pilot send "bumps"
+   ./scripts/pilot_send.sh "bumps"
    ```
-   Use this after suspected contact, near-threshold contact risk, or unexpected motion. Increment the tool call counter for this command too. If any bumper or wheel-drop bit is active, use the recovery procedure before continuing.
+   If bumper fired → bump recovery (see below). Otherwise keep moving.
 
 ---
 
@@ -156,41 +176,21 @@ Use this loop only at route gates, not after every tiny movement. Route gates ar
 
 ### Phase 2 — Drive to door (bulk of run)
 
-Use macro actions: turn once, then drive most of the clear distance. The 10 minute limit rewards fast progress; if the overhead view shows a clean corridor to the doorway, take the distance. Do not choose a move that would carry the robot into the wall or past the doorway if the heading is wrong.
+**From the moment the door is located, do not stop until you are through it or a bumper fires.**
 
-| Distance to door | Command |
-|---|---|
-| > 300 cm, clear path | `./roomba_pilot/target/debug/pilot send "move 260"` |
-| 220 - 300 cm, clear path | `./roomba_pilot/target/debug/pilot send "move 200"` |
-| 140 - 220 cm, clear path | `./roomba_pilot/target/debug/pilot send "move 140"` |
-| 80 - 140 cm | `./roomba_pilot/target/debug/pilot send "move 80"` |
-| < 80 cm | Use Phase 3 |
-
-After a large move: capture frame, estimate heading drift, and continue. Skip bumper checks unless there was contact or suspicious motion. If drift > 15°, issue one correction `turn` before the next move. If drift is <= 15° and the path is clear, keep moving; do not waste time on cosmetic alignment.
-
-If a clear macro-route exists, execute it as a short command sequence before the next analysis. Example:
+Turn once to align, then chain moves all the way to the threshold:
 
 ```bash
-./roomba_pilot/target/debug/pilot send "turn <angle-to-door>"
-./roomba_pilot/target/debug/pilot send "move 220"
-source ./scripts/capture_frame.sh
-./roomba_pilot/target/debug/pilot send "turn <small-correction>"
-./roomba_pilot/target/debug/pilot send "move 120"
+./scripts/pilot_macro.sh "turn <angle-to-door>" "move 200" "move 200" "move 80" "move 80"
 ```
 
-Do not narrate every sub-step. TTS should be one short sentence per macro action.
+Do not capture between these commands. Do not stop to check heading. If the room is roughly the size shown, two `move 200` commands plus a final `move 80` will get the robot through the door from most starting positions.
 
-If an obstacle blocks the direct path:
+If an obstacle is visible in the orient frame, pick the wider gap side, chain: `turn <skirt angle>` → `move <clear distance>` → `turn <re-aim angle>` → `move <remaining distance>`. Do all of this without capturing.
 
-- Choose the side with the larger visible gap and shortest return to the door centreline.
-- Turn 30-60° around the obstacle, move far enough to clear it by at least one robot radius, then re-aim toward the door. If the detour is obvious, do both commands before recapturing.
-- Re-aim at the door centreline immediately after clearing; do not continue along the detour heading.
+### Phase 3 — Thread the door (last ~1 m, no stops)
 
-Avoid moves below 80 cm until Phase 3 unless recovering from a bump or threading a narrow gap.
-
-### Phase 3 — Thread the door (last ~1 m)
-
-- Capture once and confirm the robot is facing the door opening, not the wall beside it.
+- **Do not capture.** You already know where the door is. Keep moving.
 - **The exit opening is to the LEFT of the wooden board/panel** — the board itself is a wall, not a door. The passable gap is the floor-level opening immediately to the left of it, where the carpet continues through. Do not target the board face; target the gap beside it.
 - More generally: the exit may not look like a traditional hinged door. Look for any floor-level gap or opening next to a wall feature — the passable route is wherever the floor continues unobstructed into the next space. If you see a large flat panel (wood, board, partition), always check both sides before concluding the wall is solid.
 - Align to the door centreline. At the threshold, being centred matters more than being perfectly square.
@@ -198,13 +198,13 @@ Avoid moves below 80 cm until Phase 3 unless recovering from a bump or threading
 
 | Situation | Command |
 |---|---|
-| 80 - 140 cm from threshold and centred | `./roomba_pilot/target/debug/pilot send "move 80"` |
-| 60 - 80 cm from threshold and centred | `./roomba_pilot/target/debug/pilot send "move 60"` |
-| 20 - 60 cm from threshold and centred | `./roomba_pilot/target/debug/pilot send "move 50"` |
-| Front at or just across threshold | `./roomba_pilot/target/debug/pilot send "move 80"` |
+| 80 - 140 cm from threshold and centred | `./scripts/pilot_send.sh "move 80"` |
+| 60 - 80 cm from threshold and centred | `./scripts/pilot_send.sh "move 60"` |
+| 20 - 60 cm from threshold and centred | `./scripts/pilot_send.sh "move 50"` |
+| Front at or just across threshold | `./scripts/pilot_send.sh "move 80"` |
 
 - If the robot is offset toward one jamb, turn 10-20° away from that jamb, move 20-30 cm, then turn back toward the doorway.
-- Once the front crosses the threshold, the priority is clearing the rear of the robot. Continue straight immediately; do not capture again unless there is a bump or clear misalignment.
+- Once the front crosses the threshold, the priority is clearing the rear of the robot. Continue straight immediately — do not capture again under any circumstances until you are calling `finish_run.sh`.
 
 ---
 
@@ -213,8 +213,9 @@ Avoid moves below 80 cm until Phase 3 unless recovering from a bump or threading
 If bumpers fire mid-move:
 
 ```bash
-./roomba_pilot/target/debug/pilot send "move -20"   # back off
-source ./scripts/capture_frame.sh                    # re-assess from image
+./scripts/pilot_send.sh "move -20"   # back off
+source ./scripts/capture_frame.sh     # re-assess from image
+./scripts/mark_decision.sh
 ```
 
 - Left bump only: `turn -35` to `turn -60` (turn right), depending on available clearance.
@@ -240,6 +241,6 @@ echo "Escaped! Run complete." >> /tmp/speak_queue.txt
 If time expires before escape:
 
 ```bash
-./roomba_pilot/target/debug/pilot send "stop"
+./scripts/pilot_send.sh "stop"
 ./scripts/finish_run.sh dnf
 ```
