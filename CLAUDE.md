@@ -151,11 +151,13 @@ Analyse the frame in under 10 seconds:
 
 Issue one turn to align, then chain all moves to the threshold in a single macro. **Use `forward 30 <s>` instead of `move` for straight-line travel — it runs at 30 cm/s instead of 20 cm/s, covering the same distance 50% faster.** The bumpers will stop you if you hit something.
 
+**The Roomba drifts to the right during long straight runs.** Compensate by inserting a small `turn 5` (5° left/CCW) correction between each `forward` segment:
+
 ```bash
-./scripts/pilot_macro.sh "turn <deg>" "forward 30 7" "forward 30 7" "forward 30 3"
+./scripts/pilot_macro.sh "turn <deg>" "forward 30 7" "turn 5" "forward 30 7" "turn 5" "forward 30 3"
 ```
 
-Each `forward 30 7` covers ~210 cm in 7 s. Two of them cross any normal room. The final `forward 30 3` (~90 cm) threads through the gap and clears the rear. Do not use short moves mid-run — if no bumper has fired, keep the distances long.
+Each `forward 30 7` covers ~210 cm in 7 s. The `turn 5` corrections add under 0.1 s each and keep the heading true over the full run. The final `forward 30 3` (~90 cm) threads through the gap and clears the rear.
 
 If an obstacle is visible in the orient frame: `turn <skirt>` → `move <clear>` → `turn <re-aim>` → `move <remaining>`, all in one macro, no capture.
 
