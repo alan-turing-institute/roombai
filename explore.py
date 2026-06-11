@@ -651,9 +651,13 @@ def camera_thread():
         if (detected
                 and door.get("confidence", 0) >= DOOR_FASTTRACK_CONF
                 and state_get("mode") not in ("APPROACH", "STOP", "WAIT")):
-            if door.get("door_center_px") is not None:
+            if door.get("door_center_px") is not None and door.get("door_open", False):
+                # Bright gap: aim at gap center.
                 error_px = door["door_center_px"] - 320
                 offset = -error_px * (66.0 / 640.0)
+            elif door.get("door_center_px") is not None:
+                # Dark gap: don't steer from it — keep current heading.
+                offset = 0.0
             else:
                 pos = door.get("door_position", "center")
                 offset = {"left": 30, "center": 0, "right": -30}.get(pos, 0)
@@ -682,27 +686,37 @@ def camera_thread():
             elif mode == "APPROACH":
                 if door.get("door_center_px") is not None:
                     # Pixel-level measurement — update bearing with proportional steering.
-                    error_px = door["door_center_px"] - 320
-                    offset = -error_px * (66.0 / 640.0)
-                    if abs(offset) > 1:
-                        new_bearing = (odom.heading + offset) % 360
-                        # Reject bearing updates that are >90° from current — likely
-                        # a false positive or scan artefact pointing the wrong way.
-                        prev_b = state_get("door_bearing")
-                        if prev_b is not None:
-                            diff = abs((new_bearing - prev_b + 180) % 360 - 180)
-                            if diff > 90:
+                    # Only steer toward a BRIGHT gap (door_open=True, bright_r >= 0.55).
+                    # A dark gap (bright_r < 0.55) is the back of the open door leaf, not
+                    # the passable corridor — steering toward it pulls the robot the wrong way.
+                    if not door.get("door_open", False):
+                        log(
+                            f"[VISION] APPROACH: pixel-steer skipped — gap dark "
+                            f"(px={door.get('door_center_px')}) — holding bearing "
+                            f"{state_get('door_bearing'):.0f}°"
+                        )
+                    else:
+                        error_px = door["door_center_px"] - 320
+                        offset = -error_px * (66.0 / 640.0)
+                        if abs(offset) > 1:
+                            new_bearing = (odom.heading + offset) % 360
+                            # Reject bearing updates that are >90° from current — likely
+                            # a false positive or scan artefact pointing the wrong way.
+                            prev_b = state_get("door_bearing")
+                            if prev_b is not None:
+                                diff = abs((new_bearing - prev_b + 180) % 360 - 180)
+                                if diff > 90:
+                                    log(
+                                        f"[VISION] APPROACH: bearing update rejected "
+                                        f"({new_bearing:.0f}° vs current {prev_b:.0f}°, diff={diff:.0f}°)"
+                                    )
+                                    new_bearing = None
+                            if new_bearing is not None:
                                 log(
-                                    f"[VISION] APPROACH: bearing update rejected "
-                                    f"({new_bearing:.0f}° vs current {prev_b:.0f}°, diff={diff:.0f}°)"
+                                    f"[VISION] APPROACH: pixel-steer {offset:+.1f}° "
+                                    f"(px={door.get('door_center_px')}) → bearing {new_bearing:.0f}°"
                                 )
-                                new_bearing = None
-                        if new_bearing is not None:
-                            log(
-                                f"[VISION] APPROACH: pixel-steer {offset:+.1f}° "
-                                f"(px={door.get('door_center_px')}) → bearing {new_bearing:.0f}°"
-                            )
-                            state_set(door_bearing=new_bearing)
+                                state_set(door_bearing=new_bearing)
                 else:
                     # Coarse YOLO-only position (left/center/right) — don't update bearing.
                     # Applying a fixed ±25° to the current heading each frame causes
@@ -714,9 +728,17 @@ def camera_thread():
                     )
 
             elif mode not in ("APPROACH", "STOP", "WAIT"):
-                if door.get("door_center_px") is not None:
+                if door.get("door_center_px") is not None and door.get("door_open", False):
+                    # Bright gap: aim at gap center.
                     error_px = door["door_center_px"] - 320
                     offset = -error_px * (66.0 / 640.0)
+                elif door.get("door_center_px") is not None:
+                    # Dark gap: don't steer toward it — keep current heading.
+                    offset = 0.0
+                    log(
+                        f"[VISION] EXPLORE→APPROACH: gap dark — using current heading "
+                        f"(px={door.get('door_center_px')})"
+                    )
                 else:
                     pos = door.get("door_position", "center")
                     offset = {"left": 30, "center": 0, "right": -30}.get(pos, 0)
