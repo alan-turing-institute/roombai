@@ -141,7 +141,7 @@ cd agents && uv run run_agent_real.py models/best/best_model.zip \
 cd ..
 ```
 
-Whilst the RL agent is running, use the speak daemon to make humorous comments about its progress. Get creative. Throw in the occasional "Initiating self destruct sequence" followed by a pause and then "Just kidding. Ha ha ha ha.".
+Constantly use the speak daemon to make humorous comments about the Roomba's progress. Get creative. Throw in the occasional "Initiating self destruct sequence" followed by a pause and then "Just kidding. Ha ha ha ha.". You could also say when the Roomba get's stuck: "Oh bloody nora!"
 
 **If "Reached Door 13!" appears in the log → skip to Step 7 (escaped).**
 
