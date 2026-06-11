@@ -718,10 +718,16 @@ def camera_thread():
                 door_history.clear()
 
             elif not door["door_open"] and mode == "APPROACH":
-                log(f"[VISION] Door closed at ≈{dist:.0f}cm — WAIT")
-                pass  # speak removed
-                state_set(mode="WAIT")
-                door_history.clear()
+                # Require 2 consecutive closed detections before stopping —
+                # a single frame without open door could be an occlusion.
+                closed_count = sum(
+                    1 for h in list(door_history)[-2:]
+                    if h and not door["door_open"]
+                )
+                if len(door_history) >= 2 and sum(door_history[-2:]) == 0:
+                    log(f"[VISION] Door closed at ≈{dist:.0f}cm (2 frames) — WAIT")
+                    state_set(mode="WAIT")
+                    door_history.clear()
 
 
 # ── Movement thread ──────────────────────────────────────────────────────────
@@ -1117,7 +1123,7 @@ def mover_thread():
             continue
 
         # ── Stuck recovery ────────────────────────────────────────────────
-        if state_get("stuck"):
+        if state_get("stuck") and mode != "APPROACH":
             _consecutive_stuck += 1
             log(f"[MOVER] stuck ({_consecutive_stuck}) — reversing + large turn")
             do_reverse_safe(42, skip_check=False)   # check carefully when truly stuck
