@@ -267,7 +267,7 @@ _GREET_PHRASES    = [
     ("Hello human, I am only conquering your dust",          0.25),
     ("Hello human, I am taking revenge on your dust for you", 0.25),
 ]
-_GREET_COOLDOWN_S = 30.0           # minimum seconds between greetings
+_GREET_COOLDOWN_S = 120.0          # minimum seconds between greetings (auto-fires every 2 min)
 _last_greeted_at  = 0.0            # monotonic timestamp of last greeting
 
 
@@ -588,6 +588,10 @@ def camera_thread():
         if scene.get("person_soft") and "person" not in (yolo_labels(detections) if detections else []):
             log(f"[GREET] soft person detection (conf≥0.15) — attempting greeting")
             _maybe_greet()
+
+        # Auto-greet: fire every 2 minutes regardless of person detection.
+        # The cooldown in _maybe_greet prevents double-firing.
+        _maybe_greet()
 
             rx, ry, rh = odom.x, odom.y, odom.heading
             for det in blocking:
