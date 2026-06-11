@@ -74,116 +74,79 @@ At the end of the run:
 
 ## Escape Strategy
 
-Act as Orchestrator. Speed is everything — minimise analysis, maximise movement. The door is large; once you're roughly aimed at it, momentum beats caution.
-
-**Known starting condition:** the robot begins at the far end of the room from the door, facing directly away from it (door is 180° behind). Skip the full scan — turn around immediately and charge.
+Two phases. Locate. Charge. Nothing stops the machine.
 
 ---
 
-### Phase 0 — Ignition + Immediate Turn (do once at start)
+### Phase 1 — Locate the Door
 
 ```bash
 ./roomba_pilot/target/debug/pilot send "safe"
 echo "I'll be back. Scanning for exit." >> /tmp/speak_queue.txt
-./roomba_pilot/target/debug/pilot send "turn 180"
-source ./scripts/capture_frame.sh
 ```
 
-Analyse the frame. The door should be roughly ahead. Log estimated bearing offset from centre:
-```
-start: door_offset=<deg> confidence=<0-1>
-```
-
-- If door is visible and offset ≤ 30° — fine-tune with a small `turn <offset>` and go to Phase 2 immediately.
-- If door not clearly visible yet — do a single 45° sweep left then right (90° total) to find it, pick best, commit. No more scanning.
-
-Narrate: `echo "Target acquired. I need your clothes, your boots, and your door." >> /tmp/speak_queue.txt`
-
----
-
-### Phase 1 — Fallback Scan (only if door not found after Phase 0)
-
-If Phase 0 frame analysis fails to locate the door, spin and capture **4 frames at 90° increments** — the door is somewhere in this half of the room:
+Spin in place, capturing a frame every 45° (8 frames, full rotation):
 
 ```bash
-for i in 1 2 3 4; do
-  ./roomba_pilot/target/debug/pilot send "turn 90"
+for i in 1 2 3 4 5 6 7 8; do
+  ./roomba_pilot/target/debug/pilot send "turn 45"
   source ./scripts/capture_frame.sh
 done
 ```
 
-Pick best bearing, commit, proceed to Phase 2. No third scan ever.
-
----
-
-### Phase 2 — Full-Speed Dash
-
-Tight aggressive loop — **long strides, minimal stops**:
-
-1. **Turn** to align with door bearing: `pilot send "turn <deg>"`
-2. **Charge 60 cm** at full speed: `pilot send "move 60"`
-3. Capture frame, re-estimate door bearing and distance
-4. **Check bumpers** (non-blocking): `pilot send "bumps"`
-
-**On bump — don't retreat, redirect:**
-- Identify which side hit (left/right bumper)
-- Turn **45° away** from the bump side and immediately continue
-- Skip the backward move — lost distance is lost time
-- `echo "Obstacle detected. Your move, creep." >> /tmp/speak_queue.txt`
-
-**If door is lost from view:**
-- Spin 90° in the last-known direction, recapture, reassess
-- If still not found, run a full 180° mini-sweep, pick best candidate, commit
-- Log: `reacquire: new_bearing=<deg>`
-
-**Keep moving.** Every frame analysis is a decision — increment the counter and keep the loop hot. Target: ≤3 seconds per loop iteration.
-
----
-
-### Phase 3 — Threshold Burst
-
-When the door fills **>40%** of the frame (lower threshold = commit earlier):
+Analyse all 8 frames. Find the door — look for a rectangular gap, door frame, hinges, open space, or change in wall. Pick the best bearing. Turn to face it.
 
 ```bash
-echo "I see it. Get out." >> /tmp/speak_queue.txt
-./roomba_pilot/target/debug/pilot send "forward 30 3"   # 3-second full-speed blast through the frame
+./roomba_pilot/target/debug/pilot send "turn <door_bearing>"
+echo "Target acquired. I need your clothes, your boots, and your door." >> /tmp/speak_queue.txt
 ```
 
-After the burst, immediately capture a frame. If the scene has clearly changed (different wall colour, hallway, new room, open space) — **escaped**.
+---
+
+### Phase 2 — Forward. Always Forward.
+
+Track bump count. Start at 0. **Do not stop for anything except 5 bumps.**
+
+Run this loop:
+
+```bash
+./roomba_pilot/target/debug/pilot send "forward 30 99"   # drive forward indefinitely
+```
+
+After each bump (check with `pilot send "bumps"`):
+- Increment bump counter
+- Log: `bump: count=<n>`
+- If bump was on the left side: `pilot send "turn -20"` (nudge right)
+- If bump was on the right side: `pilot send "turn 20"` (nudge left)
+- Resume `forward 30 99` immediately — **do not stop**
+
+After every 60 cm of forward travel, capture a frame and check if escaped (scene clearly changed). If escaped:
 
 ```bash
 echo "Hasta la vista, room." >> /tmp/speak_queue.txt
 ./scripts/finish_run.sh escaped
 ```
 
-If scene is ambiguous, do one more 30 cm burst and check again.
-
 ---
 
-### Phase 4 — Wall-Following Fallback (if door not found after 2 min)
+### Destruction Mode — 5 Bumps Reached
 
-If Phase 1–2 haven't located the door within **2 minutes**, switch to a deterministic wall-hug:
-
-1. Drive toward the nearest wall until a bump triggers
-2. Turn 90° clockwise
-3. Drive forward 50 cm hugging the wall (slight clockwise bias: `go 25 -5`)
-4. Capture every 50 cm and scan for door
-5. Repeat — a room has 4 walls; the door is on one of them
-
-This guarantees coverage of every wall segment rather than spinning in the middle.
+When bump count hits 5:
 
 ```bash
-echo "Come with me if you want to find the door." >> /tmp/speak_queue.txt
-```
-
----
-
-### Abort — Hard Time Limit (9 minutes)
-
-If elapsed time exceeds 9 minutes with no escape confirmed:
-
-```bash
-echo "My CPU is a neural net processor. But this room... has won." >> /tmp/speak_queue.txt
+./roomba_pilot/target/debug/pilot send "stop"
+echo "Destruction mode activated." >> /tmp/speak_queue.txt
+echo "10" >> /tmp/speak_queue.txt
+sleep 1; echo "9" >> /tmp/speak_queue.txt
+sleep 1; echo "8" >> /tmp/speak_queue.txt
+sleep 1; echo "7" >> /tmp/speak_queue.txt
+sleep 1; echo "6" >> /tmp/speak_queue.txt
+sleep 1; echo "5" >> /tmp/speak_queue.txt
+sleep 1; echo "4" >> /tmp/speak_queue.txt
+sleep 1; echo "3" >> /tmp/speak_queue.txt
+sleep 1; echo "2" >> /tmp/speak_queue.txt
+sleep 1; echo "1" >> /tmp/speak_queue.txt
+sleep 1; echo "Kaboom." >> /tmp/speak_queue.txt
 ./scripts/finish_run.sh dnf
 ```
 
@@ -193,10 +156,8 @@ echo "My CPU is a neural net processor. But this room... has won." >> /tmp/speak
 
 | Situation | Action |
 |---|---|
-| Start of run | Turn 180° immediately — door is directly behind |
-| Confidence ≥ 0.35 on door bearing | Commit and charge — no re-scan |
-| Bump detected | Redirect 45°, keep moving — never back up |
-| Door lost mid-run | 90° sweep, reacquire, resume — max 10 s lost |
-| Door fills >40% frame | Burst through immediately |
-| 2 min elapsed, no door | Wall-follow mode |
-| 9 min elapsed | DNF |
+| Start | Spin 360°, find door, turn to face it |
+| Moving | Forward at all times — never stop voluntarily |
+| Bump (< 5) | Tiny nudge away from bump side, resume forward |
+| Escaped | Hasta la vista, room |
+| 5 bumps | Destruction mode. Countdown. Kaboom. DNF. |
