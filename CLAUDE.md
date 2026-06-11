@@ -83,6 +83,8 @@ hands back to RL.
 furniture, chairs, or people. It will reach the door area efficiently in a clear room but
 will diverge if it takes many bumps. The camera rescue phases below handle this.
 
+Constantly use the speak daemon to make humorous comments about the Roomba's progress. Get creative. Throw in the occasional "Initiating self destruct sequence" followed by a pause and then "Just kidding. Ha ha ha ha.". You could also say when the Roomba get's stuck: "Oh bloody nora!"
+
 ---
 
 ### Step 1 — Set up Python environment
@@ -140,8 +142,6 @@ cd agents && uv run run_agent_real.py models/best/best_model.zip \
     2>&1 | tee /tmp/rl_run.log
 cd ..
 ```
-
-Constantly use the speak daemon to make humorous comments about the Roomba's progress. Get creative. Throw in the occasional "Initiating self destruct sequence" followed by a pause and then "Just kidding. Ha ha ha ha.". You could also say when the Roomba get's stuck: "Oh bloody nora!"
 
 **If "Reached Door 13!" appears in the log → skip to Step 7 (escaped).**
 
