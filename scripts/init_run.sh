@@ -14,11 +14,14 @@ PILOT_NAME=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)
 COMMIT_HASH=$(git -C "$REPO_ROOT" rev-parse --short HEAD)
 START_TIME=$(date +%s)
 
-ATTEMPT_DIR="/tmp/escape_attempt_${COMMIT_HASH}"
-mkdir -p "${ATTEMPT_DIR}/frames"
+ATTEMPT_PREFIX="/tmp/escape_attempt_${COMMIT_HASH}_"
+ATTEMPT_DIR=$(mktemp -d "${ATTEMPT_PREFIX}XXXXXXXX")
+RUN_ID="${ATTEMPT_DIR#$ATTEMPT_PREFIX}"
+mkdir "${ATTEMPT_DIR}/frames"
 
 cat > "$STATE_FILE" <<EOF
 ATTEMPT_DIR=${ATTEMPT_DIR}
+RUN_ID=${RUN_ID}
 PILOT_NAME=${PILOT_NAME}
 COMMIT_HASH=${COMMIT_HASH}
 START_TIME=${START_TIME}
@@ -28,5 +31,5 @@ FRAME_IDX=1
 EOF
 
 echo "attempt_dir=${ATTEMPT_DIR}" >> /tmp/execution_log.txt
-echo "pilot=${PILOT_NAME} commit=${COMMIT_HASH}" >> /tmp/execution_log.txt
-echo "✓ Run initialised: ${ATTEMPT_DIR} (pilot: ${PILOT_NAME}, commit: ${COMMIT_HASH})"
+echo "pilot=${PILOT_NAME} commit=${COMMIT_HASH} run_id=${RUN_ID}" >> /tmp/execution_log.txt
+echo "✓ Run initialised: ${ATTEMPT_DIR} (pilot: ${PILOT_NAME}, commit: ${COMMIT_HASH}, run: ${RUN_ID})"

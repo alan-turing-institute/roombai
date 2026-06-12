@@ -78,10 +78,10 @@ git checkout -b yourname/attempt-2
 
 ## What gets recorded
 
-Every run automatically produces a directory at `/tmp/escape_attempt_<commit>/` containing:
+Every run automatically produces a directory at `/tmp/escape_attempt_<commit>_<run_id>/` containing:
 
 ```
-escape_attempt_<commit>/
+escape_attempt_<commit>_<run_id>/
   ├── frames/
   │     ├── frame_0001.jpg    ← camera still with MM:SS overlay
   │     ├── frame_0002.jpg
@@ -94,6 +94,7 @@ escape_attempt_<commit>/
 {
   "name":       "alice/attempt-2",
   "commit":     "a1b2c3d",
+  "run_id":     "Qx7kL2mN",
   "date":       "2026-06-09",
   "duration_s": 34,
   "tool_calls": 18,

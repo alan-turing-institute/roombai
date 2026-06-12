@@ -26,6 +26,7 @@ cat > "${ATTEMPT_DIR}/metadata.json" <<EOF
 {
   "name":       "${PILOT_NAME}",
   "commit":     "${COMMIT_HASH}",
+  "run_id":     "${RUN_ID:-unknown}",
   "date":       "$(date +%Y-%m-%d)",
   "model_id":   "${MODEL_ID:-unknown}",
   "model_name": "${MODEL_NAME:-unknown}",
