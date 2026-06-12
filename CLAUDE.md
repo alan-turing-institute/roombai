@@ -74,6 +74,4 @@ At the end of the run:
 
 ## Escape Strategy
 
-<!-- Each competitor defines their own strategy here. -->
- 
- Explore aggressively the room. Everytime you bump into something use the camera to pick the best new direction.
+Continuously issue commands to the Roomba moving it into open space, turning and moving - there should always be moves queued, so there is no gap between deciding what to do and a command being run. DO NOT UNDER ANY CIRCUMSTANCES ALLOW THE ROOMBA TO STOP MOVING
