@@ -74,4 +74,4 @@ At the end of the run:
 
 ## Escape Strategy
 
-Continuously issue commands to the Roomba moving it into open space, turning and moving - there should always be moves queued, so there is no gap between deciding what to do and a command being run. DO NOT UNDER ANY CIRCUMSTANCES ALLOW THE ROOMBA TO STOP MOVING
+Come up with a movement routine that would be funniest for our live demo and make lots of funny quips via the speak daemon.
