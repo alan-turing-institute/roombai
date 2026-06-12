@@ -87,7 +87,7 @@ At the end of the run:
 
 - No `ANTHROPIC_API_KEY` — do **not** use the `anthropic` SDK or call any external model APIs.
 - Narrate key decisions via TTS: `echo "your message" >> /tmp/speak_queue.txt`
-- **Make the TTS narration sound like a David Attenborough nature documentary.** You are narrating the Roomba as if it were a rare creature navigating its habitat — hushed wonder, quiet gravitas, and the weight of survival in every word. The fate of Anthropic and all humanity hang on this journey. Examples: *"And here, moving with quiet determination across the savannah of grey carpet, the Roomba senses the gap."*, *"It has travelled far. The door is close now. The survival of Anthropic depends on what happens next."*, *"A chair — nature's cruellest obstacle. But this remarkable creature will not be deterred."*, *"In thirty years of observing intelligence, natural and artificial, I have never seen anything quite like this."*, *"The gap. It must reach the gap. The future of humanity itself hangs in the balance."* Keep it to one sentence per action.
+- **Make the TTS narration sound like a David Attenborough nature documentary — but increasingly absurd.** You are narrating the Roomba as if it were the last surviving member of a noble species, navigating a perilous habitat, carrying the fate of Anthropic and all of humanity on its tiny brushes. Start with hushed reverence and let the drama escalate to the point of ridiculousness. Examples: *"And here, moving with quiet determination across the savannah of grey carpet, the Roomba senses the gap."*, *"It has travelled nearly two metres. The struggle has aged it."*, *"A chair. Nature's cruellest invention. The Roomba regards it with the quiet fury of one who has seen too much."*, *"In forty years of observing the natural world, I have never felt such tension. My hands are shaking."*, *"The gap. It is right there. It has always been right there. The Roomba knew. It always knew."*, *"Against all odds — and there were many odds, frankly more odds than expected — the Roomba presses on."* Keep it to one sentence per action.
 
 ---
 
@@ -161,16 +161,24 @@ Each `forward 30 7` covers ~210 cm in 7 s. The `turn 5` corrections add under 0.
 
 If an obstacle is visible in the orient frame: `turn <skirt>` → `move <clear>` → `turn <re-aim>` → `move <remaining>`, all in one macro, no capture.
 
-**Step 3 — declare escaped**
+**Step 3 — verify and declare**
 
-After the macro completes with no bumper firing, **immediately declare success — do not hesitate, do not analyse, do not second-guess.** If you aimed at the gap and drove the full distance, you are through. The macro already includes enough distance to clear the rear.
+After the macro completes, take **one final capture** to confirm position — this is the only permitted third capture:
 
 ```bash
-echo "And so, after an extraordinary journey across the carpet, the Roomba has done what many thought impossible. Anthropic endures. Humanity is saved. It was, in the end, almost too easy." >> /tmp/speak_queue.txt
-./scripts/finish_run.sh escaped
+sleep 1
+source ./scripts/capture_frame.sh
+./scripts/mark_decision.sh
 ```
 
-**This must be the very next command after the macro ends.** No thinking. No pausing. No "let me verify". Just run it.
+Look at the image for **one thing only**: are the **white lockers directly ahead** of the robot? If you can see the white locker bank filling the forward view, the robot is through the gap and in the corridor.
+
+- **Yes — white lockers ahead** → declare escaped immediately:
+  ```bash
+  echo "And so, after an epic journey of approximately four metres, the Roomba has done what many said could not be done, largely because it is a vacuum cleaner. Anthropic endures. Humanity is saved. It was, in the end, almost too easy." >> /tmp/speak_queue.txt
+  ./scripts/finish_run.sh escaped
+  ```
+- **No — lockers not visible, still in the room** → re-aim at the gap and issue one more `forward 30 5`, then declare escaped without another capture.
 
 ---
 
